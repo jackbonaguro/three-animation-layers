@@ -14,13 +14,14 @@ export type PlayerClips = {
  */
 export default class AnimationPlayer {
   /** Duration (seconds) for layer fade-in / fade-out transitions. */
-  static readonly FADE_SECONDS = 0.35;
+  static readonly FADE_SECONDS = 0.15;
 
   readonly rig: THREE.Object3D;
   readonly mixer: LayeredMixer;
 
   private overlayLayer: AnimationLayer | null = null;
   private punchAction: LayerAction | null = null;
+  private idleAction: LayerAction | null = null;
   private runningAction: LayerAction | null = null;
   private _runningHeld = false;
   /** Punch outro: avoid scheduling fadeOut(remaining) more than once per swing. */
@@ -72,16 +73,25 @@ export default class AnimationPlayer {
     this.punchAction.fadeIn(AnimationPlayer.FADE_SECONDS);
   }
 
-  /** Call while W is held to run; release to stop (with fade in/out). */
+  /**
+   * While W is held: run fades in and idle fades out together (same duration).
+   * On release: run fades out and idle fades in — matches a standard mixer crossfade.
+   */
   setRunningHeld(held: boolean): void {
     if (!this.runningAction) return;
     if (held === this._runningHeld) return;
     this._runningHeld = held;
+    const t = AnimationPlayer.FADE_SECONDS;
     if (held) {
+      this.idleAction?.fadeOut(t);
       this.runningAction.reset();
-      this.runningAction.fadeIn(AnimationPlayer.FADE_SECONDS);
+      this.runningAction.fadeIn(t);
     } else {
-      this.runningAction.fadeOut(AnimationPlayer.FADE_SECONDS);
+      this.runningAction.fadeOut(t);
+      if (this.idleAction) {
+        this.idleAction.play();
+        this.idleAction.fadeIn(t);
+      }
     }
   }
 
@@ -121,6 +131,9 @@ export default class AnimationPlayer {
 
   private setupAnimationLayers(clips: PlayerClips): void {
     const baseLayer = this.mixer.addLayer('base');
+    if (clips.idleClip) {
+      this.idleAction = baseLayer.play(clips.idleClip);
+    }
     if (clips.runningClip) {
       this.runningAction = baseLayer.play(clips.runningClip);
       this.runningAction.enabled = false;
