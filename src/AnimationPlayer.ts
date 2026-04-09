@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader';
 import { LayeredMixer, AnimationLayerMask, AnimationLayer, LayerAction } from './animation';
+import { SkeletonHelper } from 'three';
 
 export type PlayerClips = {
   tposeClip?: THREE.AnimationClip;
@@ -35,6 +36,8 @@ export default class AnimationPlayer {
 
   addToScene(scene: THREE.Scene): void {
     scene.add(this.rig);
+    const skeletonHelper = new SkeletonHelper(this.rig);
+    scene.add(skeletonHelper);
   }
 
   update(deltaSeconds: number): void {
