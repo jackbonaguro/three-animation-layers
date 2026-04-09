@@ -22,8 +22,9 @@ export default class AnimationPlayer {
   private overlayLayer: AnimationLayer | null = null;
   private punchAction: LayerAction | null = null;
   private runningAction: LayerAction | null = null;
-  private _punchVisible = false;
-  private _runningActive = true;
+  private _runningHeld = false;
+  /** Punch outro: avoid scheduling fadeOut(remaining) more than once per swing. */
+  private _punchEndFadeScheduled = false;
 
   constructor(rig: THREE.Object3D, clips: PlayerClips) {
     this.rig = rig;
@@ -36,24 +37,47 @@ export default class AnimationPlayer {
   }
 
   update(deltaSeconds: number): void {
+    // Three.js pattern: fade-out duration = remaining local clip time so the clip
+    // end lines up with weight reaching 0. Sync before and after the mixer step so
+    // a large delta does not skip the fade window entirely.
+    this.syncPunchOutroFade();
     this.mixer.update(deltaSeconds);
+    this.syncPunchOutroFade();
   }
 
-  togglePunchLayer(): void {
+  /**
+   * When local time is within {@link FADE_SECONDS} of the clip end, call
+   * `fadeOut(remaining)` so the fade finishes as the clip finishes. If we are
+   * already parked on the last frame (`remaining === 0`), fade over
+   * {@link FADE_SECONDS} on the held pose (large-dt fallback).
+   */
+  private syncPunchOutroFade(): void {
+    const a = this.punchAction;
+    if (!a || !a.enabled || this._punchEndFadeScheduled) return;
+    const dur = a.clip.duration;
+    if (dur <= 0) return;
+    const fade = AnimationPlayer.FADE_SECONDS;
+    const remaining = Math.max(0, dur - a.time);
+    if (remaining > fade + 1e-6) return;
+    const outDuration = remaining > 1e-6 ? remaining : fade;
+    a.fadeOut(outDuration);
+    this._punchEndFadeScheduled = true;
+  }
+
+  /** Fire a single punch cycle (non-looping clip). Each press restarts from the beginning. */
+  triggerPunch(): void {
     if (!this.punchAction) return;
-    this._punchVisible = !this._punchVisible;
-    if (this._punchVisible) {
-      this.punchAction.play();
-      this.punchAction.fadeIn(AnimationPlayer.FADE_SECONDS);
-    } else {
-      this.punchAction.fadeOut(AnimationPlayer.FADE_SECONDS);
-    }
+    this._punchEndFadeScheduled = false;
+    this.punchAction.reset();
+    this.punchAction.fadeIn(AnimationPlayer.FADE_SECONDS);
   }
 
-  toggleRunningLayer(): void {
+  /** Call while W is held to run; release to stop (with fade in/out). */
+  setRunningHeld(held: boolean): void {
     if (!this.runningAction) return;
-    this._runningActive = !this._runningActive;
-    if (this._runningActive) {
+    if (held === this._runningHeld) return;
+    this._runningHeld = held;
+    if (held) {
       this.runningAction.reset();
       this.runningAction.fadeIn(AnimationPlayer.FADE_SECONDS);
     } else {
@@ -99,6 +123,8 @@ export default class AnimationPlayer {
     const baseLayer = this.mixer.addLayer('base');
     if (clips.runningClip) {
       this.runningAction = baseLayer.play(clips.runningClip);
+      this.runningAction.enabled = false;
+      this.runningAction.syncEffectiveWeight(this.mixer.time);
     }
 
     if (clips.punchClip) {
@@ -120,7 +146,8 @@ export default class AnimationPlayer {
 
       this.overlayLayer = this.mixer.addLayer('overlay', { mask: upperBodyMask });
       this.punchAction = this.overlayLayer.play(clips.punchClip);
-      // Start disabled; caller uses togglePunchLayer() to fade it in.
+      this.punchAction.loop = THREE.LoopOnce;
+      this.punchAction.clampWhenFinished = true;
       this.punchAction.enabled = false;
       this.punchAction.syncEffectiveWeight(this.mixer.time);
     }

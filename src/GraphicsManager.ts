@@ -11,12 +11,12 @@ export default class GraphicsManager {
   static controls: OrbitControls;
   static player: AnimationPlayer | null = null;
 
-  static togglePunchLayer(): void {
-    GraphicsManager.player?.togglePunchLayer();
+  static triggerPunch(): void {
+    GraphicsManager.player?.triggerPunch();
   }
 
-  static toggleRunningLayer(): void {
-    GraphicsManager.player?.toggleRunningLayer();
+  static setRunningHeld(held: boolean): void {
+    GraphicsManager.player?.setRunningHeld(held);
   }
 
   static async initialize(domElement: HTMLElement) {
