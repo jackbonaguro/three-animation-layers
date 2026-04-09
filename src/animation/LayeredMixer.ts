@@ -36,12 +36,11 @@ interface TrackInfo {
  *
  * ```
  * const mixer = new LayeredMixer(rig);
- * const base    = mixer.addLayer('base');               // full body
- * const overlay = mixer.addLayer('overlay', { mask });  // upper body
+ * const base  = mixer.addLayer('base');
+ * const upper = mixer.addLayer('upper', { mask });
  *
- * base.play(runClip);
- * overlay.play(punchClip);
- * overlay.weight = 0;  // fade in/out at runtime
+ * base.play(clipA);
+ * upper.play(clipB).fadeIn(0.3);
  *
  * // each frame
  * mixer.update(dt);
@@ -56,6 +55,10 @@ export class LayeredMixer {
   private _trackInfos = new Map<string, TrackInfo>();
   /** Scratch buffer for additive quaternion blending. */
   private _quatWork = new Float64Array(4);
+
+  /** Pooled weight-fade interpolants; same pattern as Three's AnimationMixer. */
+  private _controlInterpolants: LinearInterpolant[] = [];
+  private _nActiveControlInterpolants = 0;
 
   constructor(root: Object3D) {
     this.root = root;
@@ -72,9 +75,41 @@ export class LayeredMixer {
       opts?.blendMode ?? 'override',
     );
 
+    layer._bindMixer(this);
     layer._setTrackCallback((tracks) => this._registerTracks(tracks));
     this._layers.push(layer);
     return layer;
+  }
+
+  /**
+   * @internal Used by {@link LayerAction} for weight-fade curves.
+   * Mirrors Three's AnimationMixer._lendControlInterpolant.
+   */
+  _lendControlInterpolant(): LinearInterpolant {
+    const pool = this._controlInterpolants;
+    const idx = this._nActiveControlInterpolants++;
+    let interp = pool[idx];
+    if (interp === undefined) {
+      interp = new LinearInterpolant(
+        new Float32Array(2), new Float32Array(2),
+        1, _controlInterpolantsResultBuffer,
+      );
+      (interp as any).__cacheIndex = idx;
+      pool[idx] = interp;
+    }
+    return interp;
+  }
+
+  /** @internal */
+  _takeBackControlInterpolant(interp: LinearInterpolant): void {
+    const pool = this._controlInterpolants;
+    const prevIdx = (interp as any).__cacheIndex;
+    const firstInactive = --this._nActiveControlInterpolants;
+    const last = pool[firstInactive];
+    (interp as any).__cacheIndex = firstInactive;
+    pool[firstInactive] = interp;
+    (last as any).__cacheIndex = prevIdx;
+    pool[prevIdx] = last;
   }
 
   /**
@@ -84,9 +119,10 @@ export class LayeredMixer {
   update(dt: number): void {
     dt *= this.timeScale;
     this.time += dt;
+    const mixerTime = this.time;
 
     for (const layer of this._layers) {
-      layer._sample(dt);
+      layer._sample(dt, mixerTime);
     }
 
     this._compose();
@@ -137,7 +173,10 @@ export class LayeredMixer {
         if (!layerValue) continue;
 
         const maskWeight = layer.mask ? layer.mask.getWeight(info.name) : 1;
-        const effectiveWeight = layer.weight * maskWeight;
+        // sampledWeight carries action-level fading (e.g. fadeIn/fadeOut) into
+        // the cross-layer composition, completing the data flow.
+        const sampledWeight = layer.getSampledWeight(info.name);
+        const effectiveWeight = layer.weight * maskWeight * sampledWeight;
         if (effectiveWeight <= 0) continue;
 
         if (layer.blendMode === 'override') {

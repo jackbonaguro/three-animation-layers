@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader';
-import { LayeredMixer, AnimationLayerMask, AnimationLayer } from './animation';
+import { LayeredMixer, AnimationLayerMask, AnimationLayer, LayerAction } from './animation';
 
 export type PlayerClips = {
   tposeClip?: THREE.AnimationClip;
@@ -13,10 +13,17 @@ export type PlayerClips = {
  * Animated character: rig root, {@link LayeredMixer}, and layered clip setup.
  */
 export default class AnimationPlayer {
+  /** Duration (seconds) for layer fade-in / fade-out transitions. */
+  static readonly FADE_SECONDS = 0.35;
+
   readonly rig: THREE.Object3D;
   readonly mixer: LayeredMixer;
 
   private overlayLayer: AnimationLayer | null = null;
+  private punchAction: LayerAction | null = null;
+  private runningAction: LayerAction | null = null;
+  private _punchVisible = false;
+  private _runningActive = true;
 
   constructor(rig: THREE.Object3D, clips: PlayerClips) {
     this.rig = rig;
@@ -33,20 +40,24 @@ export default class AnimationPlayer {
   }
 
   togglePunchLayer(): void {
-    if (this.overlayLayer) {
-      this.overlayLayer.weight = this.overlayLayer.weight > 0 ? 0 : 1;
+    if (!this.punchAction) return;
+    this._punchVisible = !this._punchVisible;
+    if (this._punchVisible) {
+      this.punchAction.play();
+      this.punchAction.fadeIn(AnimationPlayer.FADE_SECONDS);
+    } else {
+      this.punchAction.fadeOut(AnimationPlayer.FADE_SECONDS);
     }
   }
 
   toggleRunningLayer(): void {
-    const baseLayer = this.mixer.layers[0];
-    if (baseLayer && baseLayer.actions.length > 0) {
-      const action = baseLayer.actions[0];
-      if (action.enabled) {
-        action.enabled = false;
-      } else {
-        action.reset();
-      }
+    if (!this.runningAction) return;
+    this._runningActive = !this._runningActive;
+    if (this._runningActive) {
+      this.runningAction.reset();
+      this.runningAction.fadeIn(AnimationPlayer.FADE_SECONDS);
+    } else {
+      this.runningAction.fadeOut(AnimationPlayer.FADE_SECONDS);
     }
   }
 
@@ -85,16 +96,13 @@ export default class AnimationPlayer {
   }
 
   private setupAnimationLayers(clips: PlayerClips): void {
-    // Layer 0 — full-body base.
     const baseLayer = this.mixer.addLayer('base');
     if (clips.runningClip) {
-      baseLayer.play(clips.runningClip);
+      this.runningAction = baseLayer.play(clips.runningClip);
     }
 
-    // Layer 1 — upper-body override (higher priority than base).
     if (clips.punchClip) {
       const upperBodyMask = new AnimationLayerMask({
-        // 'mixamorigHips.quaternion': 0.5,
         'mixamorigSpine.quaternion': 1,
         'mixamorigSpine1.quaternion': 1,
         'mixamorigSpine2.quaternion': 1,
@@ -111,7 +119,10 @@ export default class AnimationPlayer {
       });
 
       this.overlayLayer = this.mixer.addLayer('overlay', { mask: upperBodyMask });
-      this.overlayLayer.play(clips.punchClip);
+      this.punchAction = this.overlayLayer.play(clips.punchClip);
+      // Start disabled; caller uses togglePunchLayer() to fade it in.
+      this.punchAction.enabled = false;
+      this.punchAction.syncEffectiveWeight(this.mixer.time);
     }
   }
 

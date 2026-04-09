@@ -1,6 +1,7 @@
 import { AnimationClip, Quaternion } from 'three';
 import { AnimationLayerMask } from './AnimationLayerMask';
 import { LayerAction } from './LayerAction';
+import type { LayeredMixer } from './LayeredMixer';
 
 export type LayerBlendMode = 'override' | 'additive';
 
@@ -36,8 +37,14 @@ export class AnimationLayer {
   private _sampledValues = new Map<string, Float64Array>();
   private _sampledValueTypes = new Map<string, string>();
   private _activeTrackNames = new Set<string>();
+  /**
+   * Total action-weight accumulated per track this frame.  Capped at 1 for use
+   * as the layer's influence fraction in {@link LayeredMixer._compose}.
+   */
+  private _sampledWeights = new Map<string, number>();
 
   private _onTracksDiscovered: TrackDiscoveryCallback | null = null;
+  private _mixer: LayeredMixer | null = null;
 
   constructor(
     name: string,
@@ -59,7 +66,8 @@ export class AnimationLayer {
    * weight, etc.
    */
   play(clip: AnimationClip): LayerAction {
-    const action = new LayerAction(clip);
+    if (!this._mixer) throw new Error('AnimationLayer must be added via LayeredMixer.addLayer before calling play()');
+    const action = new LayerAction(clip, this._mixer);
     this._actions.push(action);
 
     for (const track of clip.tracks) {
@@ -99,16 +107,15 @@ export class AnimationLayer {
    *
    * @internal Called by the owning {@link LayeredMixer}.
    */
-  _sample(dt: number): void {
+  _sample(dt: number, mixerTime: number): void {
     this._activeTrackNames.clear();
+    this._sampledWeights.clear();
 
-    // Advance every action.  Collect those that are active and weighted.
     const activeActions: LayerAction[] = [];
     for (const action of this._actions) {
-      if (!action.enabled || action.paused) continue;
-      action._advance(dt);
-      // _advance may disable the action (e.g. LoopOnce finished)
-      if (action.enabled && action.weight > 0) {
+      action._advance(dt, mixerTime);
+      // _advance may disable the action (LoopOnce finished, or fade-out completed)
+      if (action.enabled && action.getEffectiveWeight() > 0) {
         activeActions.push(action);
       }
     }
@@ -137,7 +144,7 @@ export class AnimationLayer {
         const idx = action.getTrackIndex(trackName);
         if (idx < 0) continue;
 
-        const w = action.weight;
+        const w = action.getEffectiveWeight();
         if (w <= 0) continue;
 
         const val = action.getTrackValue(idx);
@@ -162,11 +169,28 @@ export class AnimationLayer {
 
       if (totalWeight > 0) {
         this._activeTrackNames.add(trackName);
+        // Cap at 1: above 1 means multiple actions fully cover the track,
+        // which the incremental-average blending already handles correctly.
+        this._sampledWeights.set(trackName, Math.min(1, totalWeight));
       }
     }
   }
 
-  /** @internal — called by the mixer to receive track-discovery notifications. */
+  /**
+   * Returns the accumulated action weight for `trackName` this frame (0–1).
+   * The compositor multiplies this into the layer's blend factor so that
+   * partially-faded actions reduce the layer's influence proportionally.
+   */
+  getSampledWeight(trackName: string): number {
+    return this._sampledWeights.get(trackName) ?? 0;
+  }
+
+  /** @internal */
+  _bindMixer(mixer: LayeredMixer): void {
+    this._mixer = mixer;
+  }
+
+  /** @internal */
   _setTrackCallback(cb: TrackDiscoveryCallback): void {
     this._onTracksDiscovered = cb;
   }
