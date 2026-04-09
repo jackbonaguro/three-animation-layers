@@ -1,19 +1,19 @@
 import * as THREE from 'three';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
-import { LayeredMixer } from './LayeredMixer.js';
+import { AnimationLayerMixer } from './AnimationLayerMixer.js';
 import { AnimationLayerMask } from './AnimationLayerMask.js';
 
 const FADE_SECONDS = 0.15;
 
 /**
- * Animated character: rig root, LayeredMixer, and layered clip setup (matches the React demo).
+ * Animated character: rig root, AnimationLayerMixer, and layered clip setup (matches the React demo).
  */
-export default class AnimationPlayer {
+export default class Character {
 
 	constructor( rig, clips ) {
 
 		this.rig = rig;
-		this.mixer = new LayeredMixer( rig );
+		this.mixer = new AnimationLayerMixer( rig );
 		this.overlayLayer = null;
 		this.punchAction = null;
 		this.idleAction = null;
@@ -93,9 +93,9 @@ export default class AnimationPlayer {
 
 	static async loadFromFbx( url = './testChar.backup.fbx', scale = 0.05 ) {
 
-		const rig = await AnimationPlayer.loadFbxRig( url, scale );
-		const clips = AnimationPlayer.extractClipsFromRig( rig );
-		return new AnimationPlayer( rig, clips );
+		const rig = await Character.loadFbxRig( url, scale );
+		const clips = Character.extractClipsFromRig( rig );
+		return new Character( rig, clips );
 
 	}
 
@@ -124,10 +124,10 @@ export default class AnimationPlayer {
 	static extractClipsFromRig( rig ) {
 
 		return {
-			tposeClip: AnimationPlayer.nameToClip( rig, 'TPose' ),
-			idleClip: AnimationPlayer.nameToClip( rig, 'Idle' ),
-			runningClip: AnimationPlayer.nameToClip( rig, 'Running' ),
-			punchClip: AnimationPlayer.nameToClip( rig, 'Punch_1' ),
+			tposeClip: Character.nameToClip( rig, 'TPose' ),
+			idleClip: Character.nameToClip( rig, 'Idle' ),
+			runningClip: Character.nameToClip( rig, 'Running' ),
+			punchClip: Character.nameToClip( rig, 'Punch_1' ),
 		};
 
 	}
@@ -182,7 +182,7 @@ export default class AnimationPlayer {
 
 		let clip = fbx.animations.find( ( a ) => a.name.includes( name ) )?.clone();
 		if ( ! clip ) return;
-		clip = AnimationPlayer.normalizeClip( clip );
+		clip = Character.normalizeClip( clip );
 		return clip;
 
 	}

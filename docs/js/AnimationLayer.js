@@ -1,5 +1,5 @@
 import { Quaternion } from 'three';
-import { LayerAction } from './LayerAction.js';
+import { AnimationLayerAction } from './AnimationLayerAction.js';
 
 function slerpFlat64( dst, dstOff, src0, src0Off, src1, src1Off, t ) {
 
@@ -16,7 +16,7 @@ function slerpFlat64( dst, dstOff, src0, src0Off, src1, src1Off, t ) {
 }
 
 /**
- * A single priority level within a LayeredMixer.
+ * A single priority level within an AnimationLayerMixer.
  */
 export class AnimationLayer {
 
@@ -86,8 +86,8 @@ export class AnimationLayer {
 
 	play( clip ) {
 
-		if ( ! this._mixer ) throw new Error( 'AnimationLayer must be added via LayeredMixer.addLayer before calling play()' );
-		const action = new LayerAction( clip, this._mixer );
+		if ( ! this._mixer ) throw new Error( 'AnimationLayer must be added via AnimationLayerMixer.addLayer before calling play()' );
+		const action = new AnimationLayerAction( clip, this._mixer );
 		action._isScheduled = true;
 		this._actions.push( action );
 
@@ -264,7 +264,7 @@ export class AnimationLayer {
 
 	_scheduleFade( duration, weightNow, weightThen ) {
 
-		if ( ! this._mixer ) throw new Error( 'AnimationLayer must be bound to a LayeredMixer before fading.' );
+		if ( ! this._mixer ) throw new Error( 'AnimationLayer must be bound to an AnimationLayerMixer before fading.' );
 		const now = this._mixer.time;
 		let interp = this._weightInterpolant;
 		if ( interp === null ) {

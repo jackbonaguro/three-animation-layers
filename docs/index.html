@@ -68,12 +68,12 @@
 			import Stats from 'three/addons/libs/stats.module.js';
 			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-			import AnimationPlayer from './js/AnimationPlayer.js';
+			import Character from './js/Character.js';
 
 			const FBX_URL = './character.fbx';
 
 			let camera, scene, renderer, controls, clock, stats;
-			let player;
+			let character;
 			let runKeyboard = false;
 
 			const settings = {
@@ -82,7 +82,7 @@
 				playback: 'Idle',
 				'trigger punch': function () {
 
-					player?.triggerPunch();
+					character?.triggerPunch();
 
 				},
 				'idle weight': 0,
@@ -104,12 +104,12 @@
 
 				folder1.add( settings, 'show model' ).onChange( function ( v ) {
 
-					if ( player ) player.rig.visible = v;
+					if ( character ) character.rig.visible = v;
 
 				} );
 				folder1.add( settings, 'show skeleton' ).onChange( function ( v ) {
 
-					if ( player?.skeletonHelper ) player.skeletonHelper.visible = v;
+					if ( character?.skeletonHelper ) character.skeletonHelper.visible = v;
 
 				} );
 
@@ -129,7 +129,7 @@
 
 				folder4.add( settings, 'mixer time scale', 0, 1.5, 0.01 ).onChange( function ( v ) {
 
-					if ( player ) player.mixer.timeScale = v;
+					if ( character ) character.mixer.timeScale = v;
 
 				} );
 
@@ -157,7 +157,7 @@
 			function applyRunState() {
 
 				const held = runKeyboard || settings.playback === 'Running';
-				player?.setRunningHeld( held );
+				character?.setRunningHeld( held );
 
 			}
 
@@ -197,9 +197,9 @@
 
 				try {
 
-					player = await AnimationPlayer.loadFromFbx( FBX_URL, 0.05 );
-					player.addToScene( scene );
-					if ( player.skeletonHelper ) player.skeletonHelper.visible = settings[ 'show skeleton' ];
+					character = await Character.loadFromFbx( FBX_URL, 0.05 );
+					character.addToScene( scene );
+					if ( character.skeletonHelper ) character.skeletonHelper.visible = settings[ 'show skeleton' ];
 
 				} catch ( err ) {
 
@@ -232,7 +232,7 @@
 
 					if ( ev.repeat ) return;
 					ev.preventDefault();
-					player?.triggerPunch();
+					character?.triggerPunch();
 					return;
 
 				}
@@ -263,15 +263,15 @@
 
 			function updateWeightDisplay() {
 
-				if ( ! player ) return;
-				settings[ 'idle weight' ] = player.idleAction
-					? player.idleAction.getEffectiveWeight()
+				if ( ! character ) return;
+				settings[ 'idle weight' ] = character.idleAction
+					? character.idleAction.getEffectiveWeight()
 					: 0;
-				settings[ 'run weight' ] = player.runningAction
-					? player.runningAction.getEffectiveWeight()
+				settings[ 'run weight' ] = character.runningAction
+					? character.runningAction.getEffectiveWeight()
 					: 0;
-				settings[ 'punch weight' ] = player.punchAction
-					? player.punchAction.getEffectiveWeight()
+				settings[ 'punch weight' ] = character.punchAction
+					? character.punchAction.getEffectiveWeight()
 					: 0;
 
 			}
@@ -280,7 +280,7 @@
 
 				const delta = clock.getDelta();
 
-				player?.update( delta );
+				character?.update( delta );
 				updateWeightDisplay();
 
 				controls.update();

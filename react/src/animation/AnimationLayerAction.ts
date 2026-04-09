@@ -5,7 +5,7 @@ import {
   LoopRepeat,
   LoopPingPong,
 } from 'three';
-import type { LayeredMixer } from './LayeredMixer';
+import type { AnimationLayerMixer } from './AnimationLayerMixer';
 
 const WRAP_AROUND = 2402;
 const ZERO_CURVATURE = 2400;
@@ -20,7 +20,7 @@ const ZERO_CURVATURE = 2400;
  * mixer's global time; when a fade-out completes at zero influence the action
  * is automatically disabled.
  */
-export class LayerAction {
+export class AnimationLayerAction {
   readonly clip: AnimationClip;
   readonly trackNames: string[];
   readonly trackValueTypes: string[];
@@ -35,7 +35,7 @@ export class LayerAction {
   repetitions = Infinity;
   clampWhenFinished = false;
 
-  private _mixer: LayeredMixer;
+  private _mixer: AnimationLayerMixer;
   private _interpolants: Interpolant[];
   private _interpolantSettings: { endingStart: number; endingEnd: number };
   private _loopCount = 0;
@@ -46,12 +46,12 @@ export class LayerAction {
   private _effectiveWeight = 0;
 
   private _startTime: number | null = null;
-  private _syncTarget: LayerAction | null = null;
+  private _syncTarget: AnimationLayerAction | null = null;
 
   /** @internal Set by AnimationLayer when the action is added/removed. */
   _isScheduled = false;
 
-  constructor(clip: AnimationClip, mixer: LayeredMixer) {
+  constructor(clip: AnimationClip, mixer: AnimationLayerMixer) {
     this.clip = clip;
     this._mixer = mixer;
     const tracks = clip.tracks;
@@ -83,7 +83,7 @@ export class LayerAction {
   //  Accessors
   // ---------------------------------------------------------------------------
 
-  getMixer(): LayeredMixer {
+  getMixer(): AnimationLayerMixer {
     return this._mixer;
   }
 
@@ -132,7 +132,7 @@ export class LayerAction {
   /**
    * Re-derives {@link getEffectiveWeight} from `enabled`, {@link weight}, and
    * any scheduled fade curve. Call this after setting `enabled` directly if you
-   * need a correct value before the next {@link LayeredMixer#update}.
+   * need a correct value before the next {@link AnimationLayerMixer#update}.
    */
   syncEffectiveWeight(mixerTime: number): void {
     this._updateWeight(mixerTime);
@@ -271,7 +271,7 @@ export class LayerAction {
    * evaluate at the same position regardless of independent weights.
    * Pass `null` to detach.
    */
-  syncWith(action: LayerAction | null): this {
+  syncWith(action: AnimationLayerAction | null): this {
     this._syncTarget = action;
     return this;
   }
@@ -282,7 +282,7 @@ export class LayerAction {
    * Pass `warp = true` to also ramp each action's time scale so clips of
    * different lengths stay aligned at both endpoints of the crossfade.
    */
-  crossFadeFrom(fadeOutAction: LayerAction, duration: number, warp = false): this {
+  crossFadeFrom(fadeOutAction: AnimationLayerAction, duration: number, warp = false): this {
     fadeOutAction.fadeOut(duration);
     this.fadeIn(duration);
 
@@ -297,7 +297,7 @@ export class LayerAction {
   }
 
   /** Convenience inverse of {@link crossFadeFrom}. */
-  crossFadeTo(fadeInAction: LayerAction, duration: number, warp = false): this {
+  crossFadeTo(fadeInAction: AnimationLayerAction, duration: number, warp = false): this {
     this.fadeOut(duration);
     fadeInAction.fadeIn(duration);
 

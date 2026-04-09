@@ -1,7 +1,7 @@
 export { AnimationLayerMask } from './AnimationLayerMask';
-export { LayerAction } from './LayerAction';
+export { AnimationLayerAction } from './AnimationLayerAction';
 export { AnimationLayer } from './AnimationLayer';
-export { LayeredMixer } from './LayeredMixer';
+export { AnimationLayerMixer } from './AnimationLayerMixer';
 
 export type { LayerBlendMode } from './AnimationLayer';
 export type {
@@ -11,4 +11,4 @@ export type {
   MixerEventType,
   MixerFinishedEvent,
   MixerLoopEvent,
-} from './LayeredMixer';
+} from './AnimationLayerMixer';

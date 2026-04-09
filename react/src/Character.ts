@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader';
-import { LayeredMixer, AnimationLayerMask, AnimationLayer, LayerAction } from './animation';
+import { AnimationLayerMixer, AnimationLayerMask, AnimationLayer, AnimationLayerAction } from './animation';
 import { SkeletonHelper } from 'three';
 
 export type PlayerClips = {
@@ -11,26 +11,26 @@ export type PlayerClips = {
 };
 
 /**
- * Animated character: rig root, {@link LayeredMixer}, and layered clip setup.
+ * Animated character: rig root, {@link AnimationLayerMixer}, and layered clip setup.
  */
-export default class AnimationPlayer {
+export default class Character {
   /** Duration (seconds) for layer fade-in / fade-out transitions. */
   static readonly FADE_SECONDS = 0.15;
 
   readonly rig: THREE.Object3D;
-  readonly mixer: LayeredMixer;
+  readonly mixer: AnimationLayerMixer;
 
   private overlayLayer: AnimationLayer | null = null;
-  private punchAction: LayerAction | null = null;
-  private idleAction: LayerAction | null = null;
-  private runningAction: LayerAction | null = null;
+  private punchAction: AnimationLayerAction | null = null;
+  private idleAction: AnimationLayerAction | null = null;
+  private runningAction: AnimationLayerAction | null = null;
   private _runningHeld = false;
   /** Punch outro: avoid scheduling fadeOut(remaining) more than once per swing. */
   private _punchEndFadeScheduled = false;
 
   constructor(rig: THREE.Object3D, clips: PlayerClips) {
     this.rig = rig;
-    this.mixer = new LayeredMixer(rig);
+    this.mixer = new AnimationLayerMixer(rig);
     this.setupAnimationLayers(clips);
   }
 
@@ -60,7 +60,7 @@ export default class AnimationPlayer {
     if (!a || !a.enabled || this._punchEndFadeScheduled) return;
     const dur = a.clip.duration;
     if (dur <= 0) return;
-    const fade = AnimationPlayer.FADE_SECONDS;
+    const fade = Character.FADE_SECONDS;
     const remaining = Math.max(0, dur - a.time);
     if (remaining > fade + 1e-6) return;
     const outDuration = remaining > 1e-6 ? remaining : fade;
@@ -73,7 +73,7 @@ export default class AnimationPlayer {
     if (!this.punchAction) return;
     this._punchEndFadeScheduled = false;
     this.punchAction.reset();
-    this.punchAction.fadeIn(AnimationPlayer.FADE_SECONDS);
+    this.punchAction.fadeIn(Character.FADE_SECONDS);
   }
 
   /**
@@ -84,7 +84,7 @@ export default class AnimationPlayer {
     if (!this.runningAction) return;
     if (held === this._runningHeld) return;
     this._runningHeld = held;
-    const t = AnimationPlayer.FADE_SECONDS;
+    const t = Character.FADE_SECONDS;
     if (held) {
       this.idleAction?.fadeOut(t);
       this.runningAction.reset();
@@ -102,10 +102,10 @@ export default class AnimationPlayer {
   static async loadFromFbx(
     url = './character.fbx',
     scale = 0.05,
-  ): Promise<AnimationPlayer> {
-    const rig = await AnimationPlayer.loadFbxRig(url, scale);
-    const clips = AnimationPlayer.extractClipsFromRig(rig);
-    return new AnimationPlayer(rig, clips);
+  ): Promise<Character> {
+    const rig = await Character.loadFbxRig(url, scale);
+    const clips = Character.extractClipsFromRig(rig);
+    return new Character(rig, clips);
   }
 
   private static async loadFbxRig(url: string, scale: number): Promise<THREE.Group> {
@@ -125,10 +125,10 @@ export default class AnimationPlayer {
   /** Build normalized clips from animations embedded on a loaded rig (e.g. FBX). */
   static extractClipsFromRig(rig: THREE.Object3D): PlayerClips {
     return {
-      tposeClip: AnimationPlayer.nameToClip(rig, 'TPose'),
-      idleClip: AnimationPlayer.nameToClip(rig, 'Idle'),
-      runningClip: AnimationPlayer.nameToClip(rig, 'Running'),
-      punchClip: AnimationPlayer.nameToClip(rig, 'Punch_1'),
+      tposeClip: Character.nameToClip(rig, 'TPose'),
+      idleClip: Character.nameToClip(rig, 'Idle'),
+      runningClip: Character.nameToClip(rig, 'Running'),
+      punchClip: Character.nameToClip(rig, 'Punch_1'),
     };
   }
 
@@ -175,7 +175,7 @@ export default class AnimationPlayer {
   ): THREE.AnimationClip | undefined {
     let clip = fbx.animations.find((a) => a.name.includes(name))?.clone();
     if (!clip) return;
-    clip = AnimationPlayer.normalizeClip(clip);
+    clip = Character.normalizeClip(clip);
     return clip;
   }
 

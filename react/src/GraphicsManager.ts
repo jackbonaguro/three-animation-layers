@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
-import AnimationPlayer from './AnimationPlayer';
+import Character from './Character';
 
 export default class GraphicsManager {
   static initialized: boolean = false;
@@ -9,14 +9,14 @@ export default class GraphicsManager {
   static scene: THREE.Scene;
   static camera: THREE.PerspectiveCamera;
   static controls: OrbitControls;
-  static player: AnimationPlayer | null = null;
+  static character: Character | null = null;
 
   static triggerPunch(): void {
-    GraphicsManager.player?.triggerPunch();
+    GraphicsManager.character?.triggerPunch();
   }
 
   static setRunningHeld(held: boolean): void {
-    GraphicsManager.player?.setRunningHeld(held);
+    GraphicsManager.character?.setRunningHeld(held);
   }
 
   static async initialize(domElement: HTMLElement) {
@@ -34,8 +34,8 @@ export default class GraphicsManager {
     GraphicsManager.controls = new OrbitControls(GraphicsManager.camera, GraphicsManager.renderer.domElement);
     GraphicsManager.controls.update();
 
-    GraphicsManager.player = await AnimationPlayer.loadFromFbx();
-    GraphicsManager.player.addToScene(GraphicsManager.scene);
+    GraphicsManager.character = await Character.loadFromFbx();
+    GraphicsManager.character.addToScene(GraphicsManager.scene);
 
     const ambientLight = new THREE.AmbientLight( 0xffffff, 1 );
     GraphicsManager.scene.add( ambientLight );
@@ -68,7 +68,7 @@ export default class GraphicsManager {
   }
 
   static update() {
-    GraphicsManager.player?.update(1 / 120);
+    GraphicsManager.character?.update(1 / 120);
     GraphicsManager.controls.update();
     GraphicsManager.renderer.render(GraphicsManager.scene, GraphicsManager.camera);
   }

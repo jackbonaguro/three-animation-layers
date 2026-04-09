@@ -6,7 +6,7 @@ const ZERO_CURVATURE = 2400;
 /**
  * Playback controller for a single clip within an AnimationLayer.
  */
-export class LayerAction {
+export class AnimationLayerAction {
 
 	constructor( clip, mixer ) {
 

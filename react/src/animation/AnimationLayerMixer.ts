@@ -1,7 +1,7 @@
 import { LinearInterpolant, Object3D, PropertyBinding, Quaternion } from 'three';
 import { AnimationLayer, LayerBlendMode } from './AnimationLayer';
 import { AnimationLayerMask } from './AnimationLayerMask';
-import type { LayerAction } from './LayerAction';
+import type { AnimationLayerAction } from './AnimationLayerAction';
 
 const _controlInterpolantsResultBuffer = new Float32Array(1);
 
@@ -17,7 +17,7 @@ export interface LayerOptions {
 export interface MixerFinishedEvent {
   type: 'finished';
   /** The action that finished. */
-  action: LayerAction;
+  action: AnimationLayerAction;
   /**
    * `1` when the clip reached its end naturally (forward playback),
    * `-1` when it reached its start (reverse playback).
@@ -28,7 +28,7 @@ export interface MixerFinishedEvent {
 export interface MixerLoopEvent {
   type: 'loop';
   /** The action that looped. */
-  action: LayerAction;
+  action: AnimationLayerAction;
   /** Number of loop boundaries crossed in this update step. */
   loopDelta: number;
 }
@@ -71,7 +71,7 @@ interface TrackInfo {
  * Layers are evaluated bottom-to-top (first added = lowest priority).
  *
  * ```
- * const mixer = new LayeredMixer(rig);
+ * const mixer = new AnimationLayerMixer(rig);
  * const base  = mixer.addLayer('base');
  * const upper = mixer.addLayer('upper', { mask });
  *
@@ -82,7 +82,7 @@ interface TrackInfo {
  * mixer.update(dt);
  * ```
  */
-export class LayeredMixer {
+export class AnimationLayerMixer {
   readonly root: Object3D;
   time = 0;
   timeScale = 1;
@@ -199,24 +199,24 @@ export class LayeredMixer {
     this._listeners.get(type)?.delete(listener);
   }
 
-  /** @internal Called by {@link LayerAction} when a LoopOnce (or repetitions-limited) clip ends. */
-  _dispatchFinished(action: LayerAction, direction: number): void {
+  /** @internal Called by {@link AnimationLayerAction} when a LoopOnce (or repetitions-limited) clip ends. */
+  _dispatchFinished(action: AnimationLayerAction, direction: number): void {
     const event: MixerFinishedEvent = { type: 'finished', action, direction };
     this._listeners.get('finished')?.forEach((fn) => fn(event));
   }
 
-  /** @internal Called by {@link LayerAction} each time a looping clip wraps. */
-  _dispatchLoop(action: LayerAction, loopDelta: number): void {
+  /** @internal Called by {@link AnimationLayerAction} each time a looping clip wraps. */
+  _dispatchLoop(action: AnimationLayerAction, loopDelta: number): void {
     const event: MixerLoopEvent = { type: 'loop', action, loopDelta };
     this._listeners.get('loop')?.forEach((fn) => fn(event));
   }
 
   // ---------------------------------------------------------------------------
-  //  Control interpolant pool (shared with LayerAction and AnimationLayer)
+  //  Control interpolant pool (shared with AnimationLayerAction and AnimationLayer)
   // ---------------------------------------------------------------------------
 
   /**
-   * @internal Used by {@link LayerAction} and {@link AnimationLayer} for weight/time-scale fade curves.
+   * @internal Used by {@link AnimationLayerAction} and {@link AnimationLayer} for weight/time-scale fade curves.
    * Mirrors Three's AnimationMixer._lendControlInterpolant.
    */
   _lendControlInterpolant(): LinearInterpolant {

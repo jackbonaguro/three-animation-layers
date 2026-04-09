@@ -6,7 +6,7 @@ const _controlInterpolantsResultBuffer = new Float32Array( 1 );
 /**
  * Per-bone animation compositor with layer priority, masks, and blend modes.
  */
-export class LayeredMixer {
+export class AnimationLayerMixer {
 
 	constructor( root ) {
 
