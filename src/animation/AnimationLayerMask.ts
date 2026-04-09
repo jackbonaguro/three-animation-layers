@@ -24,4 +24,21 @@ export class AnimationLayerMask {
       this.setWeight(name, w);
     }
   }
+
+  /**
+   * Returns a plain object snapshot of all bone weights keyed by track name.
+   * Useful for serialization and debugging.
+   */
+  getWeights(): Record<string, number> {
+    return Object.fromEntries(this._weights);
+  }
+
+  /** Iterates over `[trackName, weight]` pairs. */
+  entries(): IterableIterator<[string, number]> {
+    return this._weights.entries();
+  }
+
+  [Symbol.iterator](): IterableIterator<[string, number]> {
+    return this._weights.entries();
+  }
 }

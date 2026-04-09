@@ -4,4 +4,11 @@ export { AnimationLayer } from './AnimationLayer';
 export { LayeredMixer } from './LayeredMixer';
 
 export type { LayerBlendMode } from './AnimationLayer';
-export type { LayerOptions } from './LayeredMixer';
+export type {
+  LayerOptions,
+  MixerEvent,
+  MixerEventListener,
+  MixerEventType,
+  MixerFinishedEvent,
+  MixerLoopEvent,
+} from './LayeredMixer';

@@ -1,4 +1,4 @@
-import { AnimationClip, Quaternion } from 'three';
+import { AnimationClip, LinearInterpolant, Quaternion } from 'three';
 import { AnimationLayerMask } from './AnimationLayerMask';
 import { LayerAction } from './LayerAction';
 import type { LayeredMixer } from './LayeredMixer';
@@ -16,11 +16,20 @@ type TrackDiscoveryCallback = (
  * the layer advances all active actions, blends their per-track contributions
  * together (weighted by action weight), and exposes the result so the mixer
  * can compose across layers.
+ *
+ * Layers are evaluated bottom-to-top (first added = lowest priority).
+ *
+ * Like {@link LayerAction}, the layer itself supports weight fading via
+ * {@link fadeIn} / {@link fadeOut}, backed by the same mixer interpolant pool.
  */
 export class AnimationLayer {
   readonly name: string;
 
-  /** Global influence of this layer (0 = inactive, 1 = full). */
+  /**
+   * Base influence of this layer (0 = inactive, 1 = full).
+   * For the value actually used each frame (which may be modified by a fade
+   * curve), see {@link getEffectiveWeight}.
+   */
   weight = 1;
 
   /**
@@ -46,6 +55,9 @@ export class AnimationLayer {
   private _onTracksDiscovered: TrackDiscoveryCallback | null = null;
   private _mixer: LayeredMixer | null = null;
 
+  private _weightInterpolant: LinearInterpolant | null = null;
+  private _effectiveLayerWeight = 1;
+
   constructor(
     name: string,
     mask: AnimationLayerMask | null = null,
@@ -60,6 +72,47 @@ export class AnimationLayer {
     return this._actions;
   }
 
+  // ---------------------------------------------------------------------------
+  //  Layer weight fading
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Returns the effective layer weight for the current frame, which may differ
+   * from {@link weight} while a {@link fadeIn} / {@link fadeOut} is in progress.
+   */
+  getEffectiveWeight(): number {
+    return this._effectiveLayerWeight;
+  }
+
+  /** Sets {@link weight} to `w` and cancels any active fade. */
+  setEffectiveWeight(w: number): this {
+    this.weight = w;
+    this._effectiveLayerWeight = w;
+    return this.stopFading();
+  }
+
+  /** Schedules a linear fade of the layer weight from 0 → 1 over `duration` seconds. */
+  fadeIn(duration: number): this {
+    return this._scheduleFade(duration, 0, 1);
+  }
+
+  /** Schedules a linear fade of the layer weight from 1 → 0 over `duration` seconds. */
+  fadeOut(duration: number): this {
+    return this._scheduleFade(duration, 1, 0);
+  }
+
+  stopFading(): this {
+    if (this._weightInterpolant !== null) {
+      this._mixer!._takeBackControlInterpolant(this._weightInterpolant);
+      this._weightInterpolant = null;
+    }
+    return this;
+  }
+
+  // ---------------------------------------------------------------------------
+  //  Action management
+  // ---------------------------------------------------------------------------
+
   /**
    * Create a {@link LayerAction} for `clip`, add it to this layer, and
    * start playback.  Returns the action so callers can configure loop mode,
@@ -68,6 +121,7 @@ export class AnimationLayer {
   play(clip: AnimationClip): LayerAction {
     if (!this._mixer) throw new Error('AnimationLayer must be added via LayeredMixer.addLayer before calling play()');
     const action = new LayerAction(clip, this._mixer);
+    action._isScheduled = true;
     this._actions.push(action);
 
     for (const track of clip.tracks) {
@@ -83,10 +137,33 @@ export class AnimationLayer {
     return action;
   }
 
+  /**
+   * Returns the first {@link LayerAction} in this layer whose clip matches
+   * `clip` by reference, or `null` if none is found.
+   */
+  getAction(clip: AnimationClip): LayerAction | null {
+    return this._actions.find((a) => a.clip === clip) ?? null;
+  }
+
   removeAction(action: LayerAction): void {
     const idx = this._actions.indexOf(action);
-    if (idx >= 0) this._actions.splice(idx, 1);
+    if (idx >= 0) {
+      action._isScheduled = false;
+      this._actions.splice(idx, 1);
+    }
   }
+
+  /** Stops all actions in this layer (equivalent to calling {@link LayerAction.stop} on each). */
+  stopAllActions(): this {
+    for (const action of this._actions) {
+      action.stop();
+    }
+    return this;
+  }
+
+  // ---------------------------------------------------------------------------
+  //  Per-track sampled values (read by LayeredMixer._compose)
+  // ---------------------------------------------------------------------------
 
   /**
    * Returns the blended sample for `trackName` if any active action
@@ -102,12 +179,29 @@ export class AnimationLayer {
   }
 
   /**
+   * Returns the accumulated action weight for `trackName` this frame (0–1).
+   * The compositor multiplies this into the layer's blend factor so that
+   * partially-faded actions reduce the layer's influence proportionally.
+   */
+  getSampledWeight(trackName: string): number {
+    return this._sampledWeights.get(trackName) ?? 0;
+  }
+
+  // ---------------------------------------------------------------------------
+  //  Internal update (called by LayeredMixer.update each frame)
+  // ---------------------------------------------------------------------------
+
+  /**
    * Advance all actions by `dt` and blend their per-track contributions
    * into the layer's sample buffers.
    *
    * @internal Called by the owning {@link LayeredMixer}.
    */
   _sample(dt: number, mixerTime: number): void {
+    // Update this layer's effective weight before sampling so _compose sees
+    // the correct value without needing a separate pass.
+    this._updateEffectiveWeight(mixerTime);
+
     this._activeTrackNames.clear();
     this._sampledWeights.clear();
 
@@ -176,14 +270,9 @@ export class AnimationLayer {
     }
   }
 
-  /**
-   * Returns the accumulated action weight for `trackName` this frame (0–1).
-   * The compositor multiplies this into the layer's blend factor so that
-   * partially-faded actions reduce the layer's influence proportionally.
-   */
-  getSampledWeight(trackName: string): number {
-    return this._sampledWeights.get(trackName) ?? 0;
-  }
+  // ---------------------------------------------------------------------------
+  //  Internal bindings (called by LayeredMixer)
+  // ---------------------------------------------------------------------------
 
   /** @internal */
   _bindMixer(mixer: LayeredMixer): void {
@@ -193,6 +282,38 @@ export class AnimationLayer {
   /** @internal */
   _setTrackCallback(cb: TrackDiscoveryCallback): void {
     this._onTracksDiscovered = cb;
+  }
+
+  // ---------------------------------------------------------------------------
+  //  Private helpers
+  // ---------------------------------------------------------------------------
+
+  private _scheduleFade(duration: number, weightNow: number, weightThen: number): this {
+    if (!this._mixer) throw new Error('AnimationLayer must be bound to a LayeredMixer before fading.');
+    const now = this._mixer.time;
+    let interp = this._weightInterpolant;
+    if (interp === null) {
+      interp = this._mixer._lendControlInterpolant();
+      this._weightInterpolant = interp;
+    }
+    interp.parameterPositions[0] = now;
+    interp.parameterPositions[1] = now + duration;
+    interp.sampleValues[0] = weightNow;
+    interp.sampleValues[1] = weightThen;
+    return this;
+  }
+
+  private _updateEffectiveWeight(mixerTime: number): void {
+    let w = this.weight;
+    const interp = this._weightInterpolant;
+    if (interp !== null) {
+      const v = interp.evaluate(mixerTime)[0];
+      w *= v;
+      if (mixerTime > interp.parameterPositions[1]) {
+        this.stopFading();
+      }
+    }
+    this._effectiveLayerWeight = w;
   }
 }
 

@@ -1,6 +1,7 @@
 import { LinearInterpolant, Object3D, PropertyBinding, Quaternion } from 'three';
 import { AnimationLayer, LayerBlendMode } from './AnimationLayer';
 import { AnimationLayerMask } from './AnimationLayerMask';
+import type { LayerAction } from './LayerAction';
 
 const _controlInterpolantsResultBuffer = new Float32Array(1);
 
@@ -8,6 +9,41 @@ export interface LayerOptions {
   mask?: AnimationLayerMask | null;
   blendMode?: LayerBlendMode;
 }
+
+// ---------------------------------------------------------------------------
+//  Event types
+// ---------------------------------------------------------------------------
+
+export interface MixerFinishedEvent {
+  type: 'finished';
+  /** The action that finished. */
+  action: LayerAction;
+  /**
+   * `1` when the clip reached its end naturally (forward playback),
+   * `-1` when it reached its start (reverse playback).
+   */
+  direction: number;
+}
+
+export interface MixerLoopEvent {
+  type: 'loop';
+  /** The action that looped. */
+  action: LayerAction;
+  /** Number of loop boundaries crossed in this update step. */
+  loopDelta: number;
+}
+
+export type MixerEvent = MixerFinishedEvent | MixerLoopEvent;
+export type MixerEventType = MixerEvent['type'];
+
+export type MixerEventListener<T extends MixerEvent = MixerEvent> = (event: T) => void;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyListener = (event: any) => void;
+
+// ---------------------------------------------------------------------------
+//  Internal track cache
+// ---------------------------------------------------------------------------
 
 /**
  * Cached information for a single animated track (e.g. one bone's quaternion).
@@ -60,6 +96,8 @@ export class LayeredMixer {
   private _controlInterpolants: LinearInterpolant[] = [];
   private _nActiveControlInterpolants = 0;
 
+  private _listeners = new Map<MixerEventType, Set<AnyListener>>();
+
   constructor(root: Object3D) {
     this.root = root;
   }
@@ -67,6 +105,10 @@ export class LayeredMixer {
   get layers(): readonly AnimationLayer[] {
     return this._layers;
   }
+
+  // ---------------------------------------------------------------------------
+  //  Layer management
+  // ---------------------------------------------------------------------------
 
   addLayer(name: string, opts?: LayerOptions): AnimationLayer {
     const layer = new AnimationLayer(
@@ -81,8 +123,100 @@ export class LayeredMixer {
     return layer;
   }
 
+  // ---------------------------------------------------------------------------
+  //  Playback control
+  // ---------------------------------------------------------------------------
+
   /**
-   * @internal Used by {@link LayerAction} for weight-fade curves.
+   * Stops all actions across every layer.
+   */
+  stopAllAction(): this {
+    for (const layer of this._layers) {
+      layer.stopAllActions();
+    }
+    return this;
+  }
+
+  /**
+   * Returns the root object passed to the constructor.
+   * Mirrors Three's `AnimationMixer.getRoot()`.
+   */
+  getRoot(): Object3D {
+    return this.root;
+  }
+
+  /**
+   * Seeks the mixer to an absolute time, advancing (or rewinding) all layers
+   * by the necessary delta.  {@link timeScale} is temporarily bypassed so the
+   * target time is always reached exactly.
+   */
+  setTime(timeInSeconds: number): this {
+    const prevTimeScale = this.timeScale;
+    this.timeScale = 1;
+    this.update(timeInSeconds - this.time);
+    this.timeScale = prevTimeScale;
+    return this;
+  }
+
+  // ---------------------------------------------------------------------------
+  //  Main update
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Advance every layer by `dt` (scaled by {@link timeScale}) and write the
+   * composed result to the scene graph.
+   */
+  update(dt: number): void {
+    dt *= this.timeScale;
+    this.time += dt;
+    const mixerTime = this.time;
+
+    for (const layer of this._layers) {
+      layer._sample(dt, mixerTime);
+    }
+
+    this._compose();
+  }
+
+  // ---------------------------------------------------------------------------
+  //  Event system
+  // ---------------------------------------------------------------------------
+
+  addEventListener(type: 'finished', listener: MixerEventListener<MixerFinishedEvent>): void;
+  addEventListener(type: 'loop', listener: MixerEventListener<MixerLoopEvent>): void;
+  addEventListener(type: MixerEventType, listener: AnyListener): void {
+    let set = this._listeners.get(type);
+    if (!set) {
+      set = new Set();
+      this._listeners.set(type, set);
+    }
+    set.add(listener);
+  }
+
+  removeEventListener(type: 'finished', listener: MixerEventListener<MixerFinishedEvent>): void;
+  removeEventListener(type: 'loop', listener: MixerEventListener<MixerLoopEvent>): void;
+  removeEventListener(type: MixerEventType, listener: AnyListener): void {
+    this._listeners.get(type)?.delete(listener);
+  }
+
+  /** @internal Called by {@link LayerAction} when a LoopOnce (or repetitions-limited) clip ends. */
+  _dispatchFinished(action: LayerAction, direction: number): void {
+    const event: MixerFinishedEvent = { type: 'finished', action, direction };
+    this._listeners.get('finished')?.forEach((fn) => fn(event));
+  }
+
+  /** @internal Called by {@link LayerAction} each time a looping clip wraps. */
+  _dispatchLoop(action: LayerAction, loopDelta: number): void {
+    const event: MixerLoopEvent = { type: 'loop', action, loopDelta };
+    this._listeners.get('loop')?.forEach((fn) => fn(event));
+  }
+
+  // ---------------------------------------------------------------------------
+  //  Control interpolant pool (shared with LayerAction and AnimationLayer)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * @internal Used by {@link LayerAction} and {@link AnimationLayer} for weight/time-scale fade curves.
    * Mirrors Three's AnimationMixer._lendControlInterpolant.
    */
   _lendControlInterpolant(): LinearInterpolant {
@@ -110,22 +244,6 @@ export class LayeredMixer {
     pool[firstInactive] = interp;
     (last as any).__cacheIndex = prevIdx;
     pool[prevIdx] = last;
-  }
-
-  /**
-   * Advance every layer by `dt` (scaled by {@link timeScale}) and write the
-   * composed result to the scene graph.
-   */
-  update(dt: number): void {
-    dt *= this.timeScale;
-    this.time += dt;
-    const mixerTime = this.time;
-
-    for (const layer of this._layers) {
-      layer._sample(dt, mixerTime);
-    }
-
-    this._compose();
   }
 
   // ---------------------------------------------------------------------------
@@ -167,7 +285,9 @@ export class LayeredMixer {
       info.composedValue.set(info.originalValue);
 
       for (const layer of this._layers) {
-        if (layer.weight <= 0) continue;
+        // Use getEffectiveWeight so layer-level fades are respected.
+        const layerWeight = layer.getEffectiveWeight();
+        if (layerWeight <= 0) continue;
 
         const layerValue = layer.getSampledValue(info.name);
         if (!layerValue) continue;
@@ -176,7 +296,7 @@ export class LayeredMixer {
         // sampledWeight carries action-level fading (e.g. fadeIn/fadeOut) into
         // the cross-layer composition, completing the data flow.
         const sampledWeight = layer.getSampledWeight(info.name);
-        const effectiveWeight = layer.weight * maskWeight * sampledWeight;
+        const effectiveWeight = layerWeight * maskWeight * sampledWeight;
         if (effectiveWeight <= 0) continue;
 
         if (layer.blendMode === 'override') {

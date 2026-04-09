@@ -42,7 +42,14 @@ export class LayerAction {
   private _trackIndexMap: Map<string, number>;
 
   private _weightInterpolant: LinearInterpolant | null = null;
+  private _timeScaleInterpolant: LinearInterpolant | null = null;
   private _effectiveWeight = 0;
+
+  private _startTime: number | null = null;
+  private _syncTarget: LayerAction | null = null;
+
+  /** @internal Set by AnimationLayer when the action is added/removed. */
+  _isScheduled = false;
 
   constructor(clip: AnimationClip, mixer: LayeredMixer) {
     this.clip = clip;
@@ -72,6 +79,18 @@ export class LayerAction {
     this._effectiveWeight = this.enabled ? this.weight : 0;
   }
 
+  // ---------------------------------------------------------------------------
+  //  Accessors
+  // ---------------------------------------------------------------------------
+
+  getMixer(): LayeredMixer {
+    return this._mixer;
+  }
+
+  getRoot() {
+    return this._mixer.root;
+  }
+
   getEffectiveWeight(): number {
     return this._effectiveWeight;
   }
@@ -84,6 +103,33 @@ export class LayerAction {
   }
 
   /**
+   * Returns the current effective time scale, accounting for any active
+   * {@link warp} curve.  Zero when the action is {@link paused}.
+   */
+  getEffectiveTimeScale(): number {
+    if (this.paused) return 0;
+    return this._computeEffectiveTimeScale(this._mixer.time);
+  }
+
+  /**
+   * Sets {@link timeScale} and clears any active {@link warp}.
+   * Effective time scale is zero while {@link paused}, regardless of this value.
+   */
+  setEffectiveTimeScale(timeScale: number): this {
+    this.timeScale = timeScale;
+    return this.stopWarping();
+  }
+
+  /**
+   * Adjusts {@link timeScale} so the clip plays back in exactly `duration`
+   * seconds, then clears any active {@link warp}.
+   */
+  setDuration(duration: number): this {
+    this.timeScale = this.clip.duration / duration;
+    return this.stopWarping();
+  }
+
+  /**
    * Re-derives {@link getEffectiveWeight} from `enabled`, {@link weight}, and
    * any scheduled fade curve. Call this after setting `enabled` directly if you
    * need a correct value before the next {@link LayeredMixer#update}.
@@ -92,9 +138,43 @@ export class LayerAction {
     this._updateWeight(mixerTime);
   }
 
+  // ---------------------------------------------------------------------------
+  //  State queries
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Returns `true` when the action is currently advancing: enabled, not paused,
+   * not waiting for a {@link startAt} delay, and has a non-zero time scale.
+   */
+  isRunning(): boolean {
+    return (
+      this.enabled &&
+      !this.paused &&
+      this.timeScale !== 0 &&
+      this._startTime === null
+    );
+  }
+
+  /**
+   * Returns `true` as long as the action belongs to an {@link AnimationLayer}
+   * (i.e. has not been removed via {@link AnimationLayer.removeAction}).
+   */
+  isScheduled(): boolean {
+    return this._isScheduled;
+  }
+
+  // ---------------------------------------------------------------------------
+  //  Playback control
+  // ---------------------------------------------------------------------------
+
   play(): this {
     this.enabled = true;
     this.paused = false;
+    return this;
+  }
+
+  pause(): this {
+    this.paused = true;
     return this;
   }
 
@@ -103,7 +183,9 @@ export class LayerAction {
     this.time = 0;
     this._loopCount = 0;
     this._effectiveWeight = 0;
-    return this.stopFading();
+    this._startTime = null;
+    this._syncTarget = null;
+    return this.stopFading().stopWarping();
   }
 
   reset(): this {
@@ -111,8 +193,29 @@ export class LayerAction {
     this.paused = false;
     this.enabled = true;
     this._loopCount = 0;
+    this._startTime = null;
     return this.stopFading();
   }
+
+  /**
+   * Defers playback until the mixer's global time reaches `mixerTime`.
+   * The action must already be enabled; call {@link play} first if needed.
+   */
+  startAt(mixerTime: number): this {
+    this._startTime = mixerTime;
+    return this;
+  }
+
+  /** Sets both {@link loop} mode and {@link repetitions} in one call. */
+  setLoop(mode: number, repetitions: number): this {
+    this.loop = mode;
+    this.repetitions = repetitions;
+    return this;
+  }
+
+  // ---------------------------------------------------------------------------
+  //  Weight fading
+  // ---------------------------------------------------------------------------
 
   fadeIn(duration: number): this {
     return this._scheduleFade(duration, 0, 1);
@@ -130,6 +233,88 @@ export class LayerAction {
     return this;
   }
 
+  // ---------------------------------------------------------------------------
+  //  Time-scale warping
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Linearly ramps {@link timeScale} from `startTimeScale` to `endTimeScale`
+   * over `duration` seconds.  When the ramp completes the final value is baked
+   * into {@link timeScale} and the warp is cleared.
+   */
+  warp(startTimeScale: number, endTimeScale: number, duration: number): this {
+    return this._scheduleTimeScale(duration, startTimeScale, endTimeScale);
+  }
+
+  stopWarping(): this {
+    if (this._timeScaleInterpolant !== null) {
+      this._mixer._takeBackControlInterpolant(this._timeScaleInterpolant);
+      this._timeScaleInterpolant = null;
+    }
+    return this;
+  }
+
+  /**
+   * Fades the effective time scale to zero over `duration` seconds, freezing
+   * the action in place (equivalent to `warp(currentTimeScale, 0, duration)`).
+   */
+  halt(duration: number): this {
+    return this._scheduleTimeScale(duration, this.getEffectiveTimeScale(), 0);
+  }
+
+  // ---------------------------------------------------------------------------
+  //  Synchronisation & cross-fading
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Locks this action's {@link time} to `action`'s each frame so both clips
+   * evaluate at the same position regardless of independent weights.
+   * Pass `null` to detach.
+   */
+  syncWith(action: LayerAction | null): this {
+    this._syncTarget = action;
+    return this;
+  }
+
+  /**
+   * Fades `fadeOutAction` out and fades this action in over `duration` seconds.
+   *
+   * Pass `warp = true` to also ramp each action's time scale so clips of
+   * different lengths stay aligned at both endpoints of the crossfade.
+   */
+  crossFadeFrom(fadeOutAction: LayerAction, duration: number, warp = false): this {
+    fadeOutAction.fadeOut(duration);
+    this.fadeIn(duration);
+
+    if (warp) {
+      const fromDuration = fadeOutAction.clip.duration;
+      const toDuration = this.clip.duration;
+      fadeOutAction.warp(1, fromDuration / toDuration, duration);
+      this.warp(toDuration / fromDuration, 1, duration);
+    }
+
+    return this;
+  }
+
+  /** Convenience inverse of {@link crossFadeFrom}. */
+  crossFadeTo(fadeInAction: LayerAction, duration: number, warp = false): this {
+    this.fadeOut(duration);
+    fadeInAction.fadeIn(duration);
+
+    if (warp) {
+      const fromDuration = this.clip.duration;
+      const toDuration = fadeInAction.clip.duration;
+      this.warp(1, fromDuration / toDuration, duration);
+      fadeInAction.warp(toDuration / fromDuration, 1, duration);
+    }
+
+    return this;
+  }
+
+  // ---------------------------------------------------------------------------
+  //  Track access (used by AnimationLayer)
+  // ---------------------------------------------------------------------------
+
   getTrackIndex(name: string): number {
     return this._trackIndexMap.get(name) ?? -1;
   }
@@ -138,17 +323,41 @@ export class LayerAction {
     return this._interpolants[trackIndex].resultBuffer;
   }
 
+  // ---------------------------------------------------------------------------
+  //  Internal update (called by AnimationLayer._sample each frame)
+  // ---------------------------------------------------------------------------
+
   /** @internal Called each frame by {@link AnimationLayer._sample}. */
   _advance(dt: number, mixerTime: number): void {
-    // Always resolve the effective weight first (handles fade completion /
-    // auto-disable when a fade-out reaches 0).
     if (!this.enabled) {
       this._updateWeight(mixerTime);
       return;
     }
 
+    // Delayed start: hold until the mixer's global clock reaches _startTime.
+    if (this._startTime !== null) {
+      if (mixerTime < this._startTime) {
+        this._updateWeight(mixerTime);
+        return;
+      }
+      this._startTime = null;
+    }
+
     if (this.paused) {
       this._updateWeight(mixerTime);
+      return;
+    }
+
+    // Synced actions mirror another action's time position instead of advancing
+    // independently, keeping both clips evaluated at the same point each frame.
+    if (this._syncTarget !== null) {
+      this.time = this._syncTarget.time;
+      this._updateWeight(mixerTime);
+      if (this._effectiveWeight > 0) {
+        for (let i = 0; i < this._interpolants.length; i++) {
+          this._interpolants[i].evaluate(this.time);
+        }
+      }
       return;
     }
 
@@ -164,22 +373,28 @@ export class LayerAction {
       return;
     }
 
-    this.time += dt * this.timeScale;
+    const effectiveTS = this._computeEffectiveTimeScale(mixerTime);
+    this.time += dt * effectiveTS;
     let clipTime = this.time;
 
     if (this.loop === LoopRepeat || this.loop === LoopPingPong) {
       if (clipTime < 0 || clipTime >= duration) {
         const loopDelta = Math.floor(clipTime / duration);
         clipTime -= duration * loopDelta;
-        this._loopCount += Math.abs(loopDelta);
+        const absLoopDelta = Math.abs(loopDelta);
+        this._loopCount += absLoopDelta;
 
         if (this._loopCount >= this.repetitions) {
-          clipTime = dt > 0 ? duration : 0;
+          clipTime = effectiveTS >= 0 ? duration : 0;
           if (this.clampWhenFinished) this.paused = true;
           else this.enabled = false;
           this._updateEndings(true, true);
+          this._mixer._dispatchFinished(this, effectiveTS >= 0 ? 1 : -1);
         } else {
           this._updateEndings(false, false);
+          if (absLoopDelta > 0) {
+            this._mixer._dispatchLoop(this, absLoopDelta);
+          }
         }
       } else {
         this._updateEndings(false, false);
@@ -195,22 +410,27 @@ export class LayerAction {
         clipTime = duration;
         if (this.clampWhenFinished) this.paused = true;
         else this.enabled = false;
+        this._mixer._dispatchFinished(this, 1);
       } else if (clipTime < 0) {
         clipTime = 0;
         if (this.clampWhenFinished) this.paused = true;
         else this.enabled = false;
+        this._mixer._dispatchFinished(this, -1);
       }
     }
 
     this._updateWeight(mixerTime);
 
-    // Skip evaluation when this action has no influence.
     if (this._effectiveWeight <= 0) return;
 
     for (let i = 0; i < this._interpolants.length; i++) {
       this._interpolants[i].evaluate(clipTime);
     }
   }
+
+  // ---------------------------------------------------------------------------
+  //  Private helpers
+  // ---------------------------------------------------------------------------
 
   private _scheduleFade(duration: number, weightNow: number, weightThen: number): this {
     const now = this._mixer.time;
@@ -224,6 +444,34 @@ export class LayerAction {
     interp.sampleValues[0] = weightNow;
     interp.sampleValues[1] = weightThen;
     return this;
+  }
+
+  private _scheduleTimeScale(duration: number, startTS: number, endTS: number): this {
+    const now = this._mixer.time;
+    let interp = this._timeScaleInterpolant;
+    if (interp === null) {
+      interp = this._mixer._lendControlInterpolant();
+      this._timeScaleInterpolant = interp;
+    }
+    interp.parameterPositions[0] = now;
+    interp.parameterPositions[1] = now + duration;
+    interp.sampleValues[0] = startTS;
+    interp.sampleValues[1] = endTS;
+    return this;
+  }
+
+  private _computeEffectiveTimeScale(mixerTime: number): number {
+    const interp = this._timeScaleInterpolant;
+    if (interp !== null) {
+      const v = interp.evaluate(mixerTime)[0];
+      if (mixerTime > interp.parameterPositions[1]) {
+        // Bake the final value so timeScale stays at the warp endpoint.
+        this.timeScale = v;
+        this.stopWarping();
+      }
+      return v;
+    }
+    return this.timeScale;
   }
 
   private _updateWeight(time: number): void {
