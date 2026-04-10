@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader';
-import { AnimationLayerMixer, AnimationLayerMask, AnimationLayer, AnimationLayerAction } from './animation';
+import { AnimationLayerMixer, AnimationLayerAction, BlendTree1D, AnimationLayerMask } from './animation';
 import { SkeletonHelper } from 'three';
 
 export type PlayerClips = {
@@ -14,19 +14,23 @@ export type PlayerClips = {
  * Animated character: rig root, {@link AnimationLayerMixer}, and layered clip setup.
  */
 export default class Character {
-  /** Duration (seconds) for layer fade-in / fade-out transitions. */
-  static readonly FADE_SECONDS = 0.15;
-
   readonly rig: THREE.Object3D;
   readonly mixer: AnimationLayerMixer;
 
-  private overlayLayer: AnimationLayer | null = null;
-  private punchAction: AnimationLayerAction | null = null;
+  /**
+   * Blend parameter smoothing time constant (seconds). ~63% of the gap closes
+   * each τ; lower = snappier.
+   */
+  static readonly LOCOMOTION_SPEED_SMOOTHING = 0.2;
+
+  private locomotionBlend: BlendTree1D | null = null;
   private idleAction: AnimationLayerAction | null = null;
+  private punchAction: AnimationLayerAction | null = null;
   private runningAction: AnimationLayerAction | null = null;
-  private _runningHeld = false;
-  /** Punch outro: avoid scheduling fadeOut(remaining) more than once per swing. */
-  private _punchEndFadeScheduled = false;
+  /** Keyboard / gameplay target in [0, 1]. */
+  private _locomotionSpeedTarget = 0;
+  /** Smoothed value passed to {@link BlendTree1D#updateWeights}. */
+  private _locomotionSpeed = 0;
 
   constructor(rig: THREE.Object3D, clips: PlayerClips) {
     this.rig = rig;
@@ -41,61 +45,29 @@ export default class Character {
   }
 
   update(deltaSeconds: number): void {
-    // Three.js pattern: fade-out duration = remaining local clip time so the clip
-    // end lines up with weight reaching 0. Sync before and after the mixer step so
-    // a large delta does not skip the fade window entirely.
-    this.syncPunchOutroFade();
-    this.mixer.update(deltaSeconds);
-    this.syncPunchOutroFade();
-  }
-
-  /**
-   * When local time is within {@link FADE_SECONDS} of the clip end, call
-   * `fadeOut(remaining)` so the fade finishes as the clip finishes. If we are
-   * already parked on the last frame (`remaining === 0`), fade over
-   * {@link FADE_SECONDS} on the held pose (large-dt fallback).
-   */
-  private syncPunchOutroFade(): void {
-    const a = this.punchAction;
-    if (!a || !a.enabled || this._punchEndFadeScheduled) return;
-    const dur = a.clip.duration;
-    if (dur <= 0) return;
-    const fade = Character.FADE_SECONDS;
-    const remaining = Math.max(0, dur - a.time);
-    if (remaining > fade + 1e-6) return;
-    const outDuration = remaining > 1e-6 ? remaining : fade;
-    a.fadeOut(outDuration);
-    this._punchEndFadeScheduled = true;
-  }
-
-  /** Fire a single punch cycle (non-looping clip). Each press restarts from the beginning. */
-  triggerPunch(): void {
-    if (!this.punchAction) return;
-    this._punchEndFadeScheduled = false;
-    this.punchAction.reset();
-    this.punchAction.fadeIn(Character.FADE_SECONDS);
-  }
-
-  /**
-   * While W is held: run fades in and idle fades out together (same duration).
-   * On release: run fades out and idle fades in — matches a standard mixer crossfade.
-   */
-  setRunningHeld(held: boolean): void {
-    if (!this.runningAction) return;
-    if (held === this._runningHeld) return;
-    this._runningHeld = held;
-    const t = Character.FADE_SECONDS;
-    if (held) {
-      this.idleAction?.fadeOut(t);
-      this.runningAction.reset();
-      this.runningAction.fadeIn(t);
+    const tau = Character.LOCOMOTION_SPEED_SMOOTHING;
+    if (tau > 0 && deltaSeconds > 0) {
+      const k = 1 / tau;
+      const t = 1 - Math.exp(-k * deltaSeconds);
+      this._locomotionSpeed = THREE.MathUtils.lerp(
+        this._locomotionSpeed,
+        this._locomotionSpeedTarget,
+        t,
+      );
     } else {
-      this.runningAction.fadeOut(t);
-      if (this.idleAction) {
-        this.idleAction.play();
-        this.idleAction.fadeIn(t);
-      }
+      this._locomotionSpeed = this._locomotionSpeedTarget;
     }
+
+    this.locomotionBlend?.updateWeights(this._locomotionSpeed);
+    this.mixer.update(deltaSeconds);
+  }
+
+  /**
+   * Sets the locomotion blend target (0 idle, 0.5 punch, 1 run). The value
+   * actually used by the blend tree eases toward this each frame.
+   */
+  setLocomotionSpeed(speed: number): void {
+    this._locomotionSpeedTarget = speed;
   }
 
   /** Load an FBX rig (scale, shadows), extract clips, and construct the player. */
@@ -134,6 +106,7 @@ export default class Character {
 
   private setupAnimationLayers(clips: PlayerClips): void {
     const baseLayer = this.mixer.addLayer('base');
+
     if (clips.idleClip) {
       this.idleAction = baseLayer.clipAction(clips.idleClip);
       this.idleAction.play();
@@ -160,10 +133,18 @@ export default class Character {
       });
 
       // Mesh-space: the punch keeps the clip's own facing even while the base layer turns the hips.
-      this.overlayLayer = this.mixer.addLayer('overlay', { mask: upperBodyMask, blendMode: 'override', blendSpace: 'mesh' });
-      this.punchAction = this.overlayLayer.clipAction(clips.punchClip);
+      const overlayLayer = this.mixer.addLayer('overlay', { mask: upperBodyMask, blendMode: 'override', blendSpace: 'mesh' });
+      this.punchAction = overlayLayer.clipAction(clips.punchClip);
       this.punchAction.loop = THREE.LoopOnce;
       this.punchAction.clampWhenFinished = true;
+    }
+
+    if (this.idleAction && this.punchAction && this.runningAction) {
+      this.locomotionBlend = new BlendTree1D(
+        [this.idleAction, this.punchAction, this.runningAction],
+        [0, 0.5, 1],
+      );
+      this.locomotionBlend.updateWeights(0);
     }
   }
 

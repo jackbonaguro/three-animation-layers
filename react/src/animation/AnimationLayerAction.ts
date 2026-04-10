@@ -347,14 +347,15 @@ export class AnimationLayerAction {
       return;
     }
 
-    // Synced actions mirror another action's time position instead of advancing
-    // independently, keeping both clips evaluated at the same point each frame.
+    // Synced actions follow the target's cycle phase mapped into this clip's length.
+    // Using the target's raw local time would evaluate short clips far past their keys.
     if (this._syncTarget !== null) {
-      this.time = this._syncTarget.time;
+      const sampleTime = this._syncSampleTimeFrom(this._syncTarget);
+      this.time = sampleTime;
       this._updateWeight(mixerTime);
       if (this._effectiveWeight > 0) {
         for (let i = 0; i < this._interpolants.length; i++) {
-          this._interpolants[i].evaluate(this.time);
+          this._interpolants[i].evaluate(sampleTime);
         }
       }
       return;
@@ -412,6 +413,11 @@ export class AnimationLayerAction {
       }
     }
 
+    // Keep .time equal to the local clip time used for sampling (wrapped / clamped).
+    // Synced followers use {@link _syncSampleTimeFrom} so they stay in-range; without
+    // storing wrapped time here the leader would expose an unbounded clock to that step.
+    this.time = clipTime;
+
     this._updateWeight(mixerTime);
 
     if (this._effectiveWeight <= 0) return;
@@ -424,6 +430,32 @@ export class AnimationLayerAction {
   // ---------------------------------------------------------------------------
   //  Private helpers
   // ---------------------------------------------------------------------------
+
+  /**
+   * Local time on this clip that matches `target`'s position in its own cycle (phase sync).
+   */
+  private _syncSampleTimeFrom(target: AnimationLayerAction): number {
+    const dT = target.clip.duration;
+    const dS = this.clip.duration;
+    if (dT <= 0 || dS <= 0) return 0;
+
+    let t = target.time;
+    if (target.loop === LoopRepeat || target.loop === LoopPingPong) {
+      t = ((t % dT) + dT) % dT;
+    } else {
+      t = Math.min(dT, Math.max(0, t));
+    }
+
+    const phase = t / dT;
+    let sampleTime = phase * dS;
+
+    if (this.loop === LoopRepeat || this.loop === LoopPingPong) {
+      sampleTime = ((sampleTime % dS) + dS) % dS;
+    } else {
+      sampleTime = Math.min(dS, Math.max(0, sampleTime));
+    }
+    return sampleTime;
+  }
 
   private _scheduleFade(duration: number, weightNow: number, weightThen: number): this {
     const now = this._mixer.time;

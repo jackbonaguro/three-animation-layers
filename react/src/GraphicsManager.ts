@@ -11,12 +11,9 @@ export default class GraphicsManager {
   static controls: OrbitControls;
   static character: Character | null = null;
 
-  static triggerPunch(): void {
-    GraphicsManager.character?.triggerPunch();
-  }
-
-  static setRunningHeld(held: boolean): void {
-    GraphicsManager.character?.setRunningHeld(held);
+  /** Locomotion blend target: 0 = idle, 0.5 = punch, 1 = run (smoothed in {@link Character.update}). */
+  static setLocomotionSpeed(speed: number): void {
+    GraphicsManager.character?.setLocomotionSpeed(speed);
   }
 
   static async initialize(domElement: HTMLElement) {
