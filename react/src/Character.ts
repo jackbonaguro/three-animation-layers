@@ -8,6 +8,7 @@ export type PlayerClips = {
   idleClip?: THREE.AnimationClip;
   runningClip?: THREE.AnimationClip;
   punchClip?: THREE.AnimationClip;
+  walkingClip?: THREE.AnimationClip;
 };
 
 /**
@@ -25,8 +26,9 @@ export default class Character {
 
   private locomotionBlend: BlendTree1D | null = null;
   private idleAction: AnimationLayerAction | null = null;
-  private punchAction: AnimationLayerAction | null = null;
+  private walkingAction: AnimationLayerAction | null = null;
   private runningAction: AnimationLayerAction | null = null;
+  private punchAction: AnimationLayerAction | null = null;
   /** Keyboard / gameplay target in [0, 1]. */
   private _locomotionSpeedTarget = 0;
   /** Smoothed value passed to {@link BlendTree1D#updateWeights}. */
@@ -59,7 +61,35 @@ export default class Character {
     }
 
     this.locomotionBlend?.updateWeights(this._locomotionSpeed);
+    this.applyLocomotionPhaseTimeScale();
     this.mixer.update(deltaSeconds);
+  }
+
+  /**
+   * Walk/run are synced to idle's cycle phase, so only idle's clock advances the
+   * whole locomotion stack. Scale that root so full run matches the run clip's
+   * natural rate (idle/run duration ratio), while idle stays ~1x: smoothed
+   * {@link _locomotionSpeed} lingers near 0 for a long time, and raw
+   * `s * cadenceMul` would drag the shared clock to a crawl even when the blend
+   * is still almost entirely idle.
+   */
+  private applyLocomotionPhaseTimeScale(): void {
+    if (!this.idleAction) return;
+    const s = this._locomotionSpeed;
+    if (s <= 0) {
+      this.idleAction.setEffectiveTimeScale(1);
+      return;
+    }
+    const dIdle = this.idleAction.clip.duration;
+    const dRun = this.runningAction?.clip.duration ?? dIdle;
+    const cadenceMul =
+      dIdle > 0 && dRun > 0 ? dIdle / dRun : 1;
+    const motionTs = s * cadenceMul;
+    // Same idle→walk edge as BlendTree1D thresholds [0, 0.5, 1]: idle weight is
+    // (0.5 - s) / 0.5 on [0, 0.5], 0 after.
+    const idleW = s >= 0.5 ? 0 : (0.5 - s) / 0.5;
+    const ts = THREE.MathUtils.lerp(motionTs, 1, idleW);
+    this.idleAction.setEffectiveTimeScale(ts);
   }
 
   /**
@@ -76,8 +106,14 @@ export default class Character {
     scale = 0.05,
   ): Promise<Character> {
     const rig = await Character.loadFbxRig(url, scale);
+    const walking = await Character.loadFbxRig('./Walking.fbx', scale);
     const clips = Character.extractClipsFromRig(rig);
-    return new Character(rig, clips);
+    const { walkingClip } = Character.extractClipsFromRig(walking);
+    const mergedClips = {
+      ...clips,
+      walkingClip,
+    };
+    return new Character(rig, mergedClips);
   }
 
   private static async loadFbxRig(url: string, scale: number): Promise<THREE.Group> {
@@ -96,11 +132,13 @@ export default class Character {
 
   /** Build normalized clips from animations embedded on a loaded rig (e.g. FBX). */
   static extractClipsFromRig(rig: THREE.Object3D): PlayerClips {
+    // console.log(rig.animations);
     return {
       tposeClip: Character.nameToClip(rig, 'TPose'),
       idleClip: Character.nameToClip(rig, 'Idle'),
       runningClip: Character.nameToClip(rig, 'Running'),
       punchClip: Character.nameToClip(rig, 'Punch_1'),
+      walkingClip: Character.nameToClip(rig, 'mixamo.com'),
     };
   }
 
@@ -110,6 +148,10 @@ export default class Character {
     if (clips.idleClip) {
       this.idleAction = baseLayer.clipAction(clips.idleClip);
       this.idleAction.play();
+    }
+    if (clips.walkingClip) {
+      this.walkingAction = baseLayer.clipAction(clips.walkingClip);
+      // this.walkingAction.loop = THREE.LoopRepeat;
     }
     if (clips.runningClip) {
       this.runningAction = baseLayer.clipAction(clips.runningClip);
@@ -139,9 +181,10 @@ export default class Character {
       this.punchAction.clampWhenFinished = true;
     }
 
-    if (this.idleAction && this.punchAction && this.runningAction) {
+
+    if (this.idleAction && this.walkingAction && this.runningAction) {
       this.locomotionBlend = new BlendTree1D(
-        [this.idleAction, this.punchAction, this.runningAction],
+        [this.idleAction, this.walkingAction, this.runningAction],
         [0, 0.5, 1],
       );
       this.locomotionBlend.updateWeights(0);
@@ -168,10 +211,15 @@ export default class Character {
       return track.name.toLowerCase().includes('hips') && track.name.toLowerCase().includes('position');
     });
     if (hipsPositionTrack) {
-      for (let i = 0; i < hipsPositionTrack.values.length; i++) {
+      const v = hipsPositionTrack.values;
+      for (let i = 0; i < v.length; i++) {
         if (i % 3 !== 1) {
-          hipsPositionTrack.values[i] = 0;
+          v[i] = 0;
         }
+      }
+      const y0 = v[1];
+      for (let i = 1; i < v.length; i += 3) {
+        v[i] -= y0;
       }
       filteredTracks.push(hipsPositionTrack);
     }
