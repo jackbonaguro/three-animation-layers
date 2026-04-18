@@ -5,10 +5,6 @@ import type { AnimationLayerMixer } from './AnimationLayerMixer';
 
 export type LayerBlendMode = 'override' | 'additive';
 
-type TrackDiscoveryCallback = (
-  tracks: readonly { name: string; ValueTypeName: string; getValueSize(): number }[],
-) => void;
-
 /**
  * A single priority level within a {@link AnimationLayerMixer}.
  *
@@ -51,8 +47,6 @@ export class AnimationLayer {
    * as the layer's influence fraction in {@link AnimationLayerMixer._compose}.
    */
   private _sampledWeights = new Map<string, number>();
-
-  private _onTracksDiscovered: TrackDiscoveryCallback | null = null;
   private _mixer: AnimationLayerMixer | null = null;
 
   private _weightInterpolant: LinearInterpolant | null = null;
@@ -114,11 +108,10 @@ export class AnimationLayer {
   // ---------------------------------------------------------------------------
 
   /**
-   * Create a {@link AnimationLayerAction} for `clip`, add it to this layer, and
-   * start playback.  Returns the action so callers can configure loop mode,
-   * weight, etc.
+   * Create a {@link AnimationLayerAction} for `clip` and add it to this layer.
+   * Returns the action.
    */
-  play(clip: AnimationClip): AnimationLayerAction {
+  clipAction(clip: AnimationClip): AnimationLayerAction {
     if (!this._mixer) throw new Error('AnimationLayer must be added via AnimationLayerMixer.addLayer before calling play()');
     const action = new AnimationLayerAction(clip, this._mixer);
     action._isScheduled = true;
@@ -131,9 +124,9 @@ export class AnimationLayer {
       }
     }
 
-    this._onTracksDiscovered?.(clip.tracks);
-
-    action.play();
+    if (this._mixer) {
+      this._mixer.registerTracks(clip.tracks);
+    }
     return action;
   }
 
@@ -250,7 +243,7 @@ export class AnimationLayer {
         } else {
           const mix = w / (totalWeight + w);
           if (valueType === 'quaternion') {
-            slerpFlat64(buffer, 0, buffer, 0, val, 0, mix);
+            slerpQuaternionInPlace(buffer, val, mix);
           } else {
             for (let i = 0; i < valueSize; i++) {
               buffer[i] += (val[i] - buffer[i]) * mix;
@@ -277,11 +270,6 @@ export class AnimationLayer {
   /** @internal */
   _bindMixer(mixer: AnimationLayerMixer): void {
     this._mixer = mixer;
-  }
-
-  /** @internal */
-  _setTrackCallback(cb: TrackDiscoveryCallback): void {
-    this._onTracksDiscovered = cb;
   }
 
   // ---------------------------------------------------------------------------
@@ -317,23 +305,15 @@ export class AnimationLayer {
   }
 }
 
-/** Slerp helper that accepts Float64Array / ArrayLike without TS complaints. */
-function slerpFlat64(
+export function slerpQuaternionInPlace(
   dst: Float64Array,
-  dstOff: number,
-  src0: ArrayLike<number>,
-  src0Off: number,
   src1: ArrayLike<number>,
-  src1Off: number,
   t: number,
 ): void {
   Quaternion.slerpFlat(
-    dst as unknown as number[],
-    dstOff,
-    src0 as unknown as number[],
-    src0Off,
-    src1 as unknown as number[],
-    src1Off,
+    dst as unknown as number[], 0,
+    dst as unknown as number[], 0,
+    src1 as unknown as number[], 0,
     t,
   );
 }

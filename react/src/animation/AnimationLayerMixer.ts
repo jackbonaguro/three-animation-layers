@@ -1,5 +1,5 @@
-import { LinearInterpolant, Object3D, PropertyBinding, Quaternion } from 'three';
-import { AnimationLayer, LayerBlendMode } from './AnimationLayer';
+import { KeyframeTrack, LinearInterpolant, Object3D, PropertyBinding, Quaternion } from 'three';
+import { AnimationLayer, LayerBlendMode, slerpQuaternionInPlace } from './AnimationLayer';
 import { AnimationLayerMask } from './AnimationLayerMask';
 import type { AnimationLayerAction } from './AnimationLayerAction';
 
@@ -62,25 +62,16 @@ interface TrackInfo {
 }
 
 /**
- * Per-bone animation compositor.
+ * Animation Mixer with support for independent per-bone weights per action.
+ * These weights can be combined by layers, which supply bone weights via a mask.
  *
- * Replaces Three's {@link AnimationMixer} with a layer-based model where
- * each layer independently samples its clips and the mixer composes the
- * results per bone, respecting layer priority, masks, and blend mode.
+ * Each layer independently samples its clips, and the mixer composes the
+ * results respecting layer priority, masks, and blend mode.
  *
  * Layers are evaluated bottom-to-top (first added = lowest priority).
- *
- * ```
- * const mixer = new AnimationLayerMixer(rig);
- * const base  = mixer.addLayer('base');
- * const upper = mixer.addLayer('upper', { mask });
- *
- * base.play(clipA);
- * upper.play(clipB).fadeIn(0.3);
- *
- * // each frame
- * mixer.update(dt);
- * ```
+ * 
+ * Also unlike the stock animation system, most of the actual logic for blending
+ * is here, not in the actions or PropertyMixer classes.
  */
 export class AnimationLayerMixer {
   readonly root: Object3D;
@@ -118,7 +109,6 @@ export class AnimationLayerMixer {
     );
 
     layer._bindMixer(this);
-    layer._setTrackCallback((tracks) => this._registerTracks(tracks));
     this._layers.push(layer);
     return layer;
   }
@@ -250,8 +240,8 @@ export class AnimationLayerMixer {
   //  Track registration
   // ---------------------------------------------------------------------------
 
-  private _registerTracks(
-    tracks: readonly { name: string; ValueTypeName: string; getValueSize(): number }[],
+  registerTracks(
+    tracks: KeyframeTrack[]
   ): void {
     for (const track of tracks) {
       if (this._trackInfos.has(track.name)) continue;
@@ -314,12 +304,7 @@ export class AnimationLayerMixer {
   private _blendOverride(info: TrackInfo, src: Float64Array, weight: number): void {
     const dst = info.composedValue;
     if (info.valueType === 'quaternion') {
-      Quaternion.slerpFlat(
-        dst as unknown as number[], 0,
-        dst as unknown as number[], 0,
-        src as unknown as number[], 0,
-        weight,
-      );
+      slerpQuaternionInPlace(dst, src, weight);
     } else {
       for (let i = 0; i < info.valueSize; i++) {
         dst[i] += (src[i] - dst[i]) * weight;

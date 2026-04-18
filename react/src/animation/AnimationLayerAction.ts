@@ -4,11 +4,10 @@ import {
   LinearInterpolant,
   LoopRepeat,
   LoopPingPong,
+  WrapAroundEnding,
+  ZeroCurvatureEnding,
 } from 'three';
 import type { AnimationLayerMixer } from './AnimationLayerMixer';
-
-const WRAP_AROUND = 2402;
-const ZERO_CURVATURE = 2400;
 
 /**
  * Playback controller for a single {@link AnimationClip} within an
@@ -29,7 +28,7 @@ export class AnimationLayerAction {
   time = 0;
   timeScale = 1;
   weight = 1;
-  enabled = true;
+  enabled = false;
   paused = false;
   loop: number = LoopRepeat;
   repetitions = Infinity;
@@ -66,8 +65,8 @@ export class AnimationLayerAction {
     }
 
     this._interpolantSettings = {
-      endingStart: WRAP_AROUND,
-      endingEnd: WRAP_AROUND,
+      endingStart: WrapAroundEnding,
+      endingEnd: WrapAroundEnding,
     };
 
     this._interpolants = tracks.map((t) => {
@@ -492,7 +491,7 @@ export class AnimationLayerAction {
   }
 
   private _updateEndings(atStart: boolean, atEnd: boolean): void {
-    this._interpolantSettings.endingStart = atStart ? ZERO_CURVATURE : WRAP_AROUND;
-    this._interpolantSettings.endingEnd = atEnd ? ZERO_CURVATURE : WRAP_AROUND;
+    this._interpolantSettings.endingStart = atStart ? ZeroCurvatureEnding : WrapAroundEnding;
+    this._interpolantSettings.endingEnd = atEnd ? ZeroCurvatureEnding : WrapAroundEnding;
   }
 }

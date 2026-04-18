@@ -135,12 +135,11 @@ export default class Character {
   private setupAnimationLayers(clips: PlayerClips): void {
     const baseLayer = this.mixer.addLayer('base');
     if (clips.idleClip) {
-      this.idleAction = baseLayer.play(clips.idleClip);
+      this.idleAction = baseLayer.clipAction(clips.idleClip);
+      this.idleAction.play();
     }
     if (clips.runningClip) {
-      this.runningAction = baseLayer.play(clips.runningClip);
-      this.runningAction.enabled = false;
-      this.runningAction.syncEffectiveWeight(this.mixer.time);
+      this.runningAction = baseLayer.clipAction(clips.runningClip);
     }
 
     if (clips.punchClip) {
@@ -161,11 +160,9 @@ export default class Character {
       });
 
       this.overlayLayer = this.mixer.addLayer('overlay', { mask: upperBodyMask });
-      this.punchAction = this.overlayLayer.play(clips.punchClip);
+      this.punchAction = this.overlayLayer.clipAction(clips.punchClip);
       this.punchAction.loop = THREE.LoopOnce;
       this.punchAction.clampWhenFinished = true;
-      this.punchAction.enabled = false;
-      this.punchAction.syncEffectiveWeight(this.mixer.time);
     }
   }
 
