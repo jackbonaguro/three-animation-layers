@@ -11,37 +11,6 @@ export interface LayerOptions {
 }
 
 // ---------------------------------------------------------------------------
-//  Event types
-// ---------------------------------------------------------------------------
-
-export interface MixerFinishedEvent {
-  type: 'finished';
-  /** The action that finished. */
-  action: AnimationLayerAction;
-  /**
-   * `1` when the clip reached its end naturally (forward playback),
-   * `-1` when it reached its start (reverse playback).
-   */
-  direction: number;
-}
-
-export interface MixerLoopEvent {
-  type: 'loop';
-  /** The action that looped. */
-  action: AnimationLayerAction;
-  /** Number of loop boundaries crossed in this update step. */
-  loopDelta: number;
-}
-
-export type MixerEvent = MixerFinishedEvent | MixerLoopEvent;
-export type MixerEventType = MixerEvent['type'];
-
-export type MixerEventListener<T extends MixerEvent = MixerEvent> = (event: T) => void;
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type AnyListener = (event: any) => void;
-
-// ---------------------------------------------------------------------------
 //  Internal track cache
 // ---------------------------------------------------------------------------
 
@@ -86,8 +55,6 @@ export class AnimationLayerMixer {
   /** Pooled weight-fade interpolants; same pattern as Three's AnimationMixer. */
   private _controlInterpolants: LinearInterpolant[] = [];
   private _nActiveControlInterpolants = 0;
-
-  private _listeners = new Map<MixerEventType, Set<AnyListener>>();
 
   constructor(root: Object3D) {
     this.root = root;
@@ -166,39 +133,6 @@ export class AnimationLayerMixer {
     }
 
     this._compose();
-  }
-
-  // ---------------------------------------------------------------------------
-  //  Event system
-  // ---------------------------------------------------------------------------
-
-  addEventListener(type: 'finished', listener: MixerEventListener<MixerFinishedEvent>): void;
-  addEventListener(type: 'loop', listener: MixerEventListener<MixerLoopEvent>): void;
-  addEventListener(type: MixerEventType, listener: AnyListener): void {
-    let set = this._listeners.get(type);
-    if (!set) {
-      set = new Set();
-      this._listeners.set(type, set);
-    }
-    set.add(listener);
-  }
-
-  removeEventListener(type: 'finished', listener: MixerEventListener<MixerFinishedEvent>): void;
-  removeEventListener(type: 'loop', listener: MixerEventListener<MixerLoopEvent>): void;
-  removeEventListener(type: MixerEventType, listener: AnyListener): void {
-    this._listeners.get(type)?.delete(listener);
-  }
-
-  /** @internal Called by {@link AnimationLayerAction} when a LoopOnce (or repetitions-limited) clip ends. */
-  _dispatchFinished(action: AnimationLayerAction, direction: number): void {
-    const event: MixerFinishedEvent = { type: 'finished', action, direction };
-    this._listeners.get('finished')?.forEach((fn) => fn(event));
-  }
-
-  /** @internal Called by {@link AnimationLayerAction} each time a looping clip wraps. */
-  _dispatchLoop(action: AnimationLayerAction, loopDelta: number): void {
-    const event: MixerLoopEvent = { type: 'loop', action, loopDelta };
-    this._listeners.get('loop')?.forEach((fn) => fn(event));
   }
 
   // ---------------------------------------------------------------------------

@@ -388,12 +388,8 @@ export class AnimationLayerAction {
           if (this.clampWhenFinished) this.paused = true;
           else this.enabled = false;
           this._updateEndings(true, true);
-          this._mixer._dispatchFinished(this, effectiveTS >= 0 ? 1 : -1);
         } else {
           this._updateEndings(false, false);
-          if (absLoopDelta > 0) {
-            this._mixer._dispatchLoop(this, absLoopDelta);
-          }
         }
       } else {
         this._updateEndings(false, false);
@@ -409,12 +405,10 @@ export class AnimationLayerAction {
         clipTime = duration;
         if (this.clampWhenFinished) this.paused = true;
         else this.enabled = false;
-        this._mixer._dispatchFinished(this, 1);
       } else if (clipTime < 0) {
         clipTime = 0;
         if (this.clampWhenFinished) this.paused = true;
         else this.enabled = false;
-        this._mixer._dispatchFinished(this, -1);
       }
     }
 
