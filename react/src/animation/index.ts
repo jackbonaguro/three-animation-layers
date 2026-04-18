@@ -1,4 +1,5 @@
-export { BlendTree1D, BlendTree2D } from './BlendTree';
+export { AnimationBlendTree1D } from './AnimationBlendTree1D';
+export { AnimationBlendTree2D } from './AnimationBlendTree2D';
 export { AnimationLayerMask } from './AnimationLayerMask';
 export { AnimationLayerAction } from './AnimationLayerAction';
 export { AnimationLayer } from './AnimationLayer';

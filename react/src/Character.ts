@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader';
-import { AnimationLayerMixer, AnimationLayerAction, BlendTree1D, AnimationLayerMask } from './animation';
+import { AnimationLayerMixer, AnimationLayerAction, AnimationBlendTree1D, AnimationLayerMask } from './animation';
 import { SkeletonHelper } from 'three';
 
 export type PlayerClips = {
@@ -15,6 +15,9 @@ export type PlayerClips = {
  * Animated character: rig root, {@link AnimationLayerMixer}, and layered clip setup.
  */
 export default class Character {
+  /** Duration (seconds) for layer fade-in / fade-out transitions. */
+  static readonly FADE_SECONDS = 0.15;
+
   readonly rig: THREE.Object3D;
   readonly mixer: AnimationLayerMixer;
 
@@ -24,14 +27,17 @@ export default class Character {
    */
   static readonly LOCOMOTION_SPEED_SMOOTHING = 0.2;
 
-  private locomotionBlend: BlendTree1D | null = null;
+  private locomotionBlend: AnimationBlendTree1D | null = null;
   private idleAction: AnimationLayerAction | null = null;
   private walkingAction: AnimationLayerAction | null = null;
   private runningAction: AnimationLayerAction | null = null;
   private punchAction: AnimationLayerAction | null = null;
+  /** Punch outro: avoid scheduling fadeOut(remaining) more than once per swing. */
+  private _punchEndFadeScheduled = false;
+
   /** Keyboard / gameplay target in [0, 1]. */
   private _locomotionSpeedTarget = 0;
-  /** Smoothed value passed to {@link BlendTree1D#updateWeights}. */
+  /** Smoothed value passed to {@link AnimationBlendTree1D#updateWeights}. */
   private _locomotionSpeed = 0;
 
   constructor(rig: THREE.Object3D, clips: PlayerClips) {
@@ -62,7 +68,12 @@ export default class Character {
 
     this.locomotionBlend?.updateWeights(this._locomotionSpeed);
     this.applyLocomotionPhaseTimeScale();
+
+    this.syncPunchOutroFade();
+
     this.mixer.update(deltaSeconds);
+
+    this.syncPunchOutroFade();
   }
 
   /**
@@ -142,7 +153,34 @@ export default class Character {
     };
   }
 
+  triggerPunch(): void {
+    if (!this.punchAction) return;
+    this._punchEndFadeScheduled = false;
+    this.punchAction.reset();
+    this.punchAction.fadeIn(Character.FADE_SECONDS);
+  }
+
+  /**
+   * When local time is within {@link FADE_SECONDS} of the clip end, call
+   * `fadeOut(remaining)` so the fade finishes as the clip finishes. If we are
+   * already parked on the last frame (`remaining === 0`), fade over
+   * {@link FADE_SECONDS} on the held pose (large-dt fallback).
+   */
+  private syncPunchOutroFade(): void {
+    const a = this.punchAction;
+    if (!a || !a.enabled || this._punchEndFadeScheduled) return;
+    const dur = a.clip.duration;
+    if (dur <= 0) return;
+    const fade = Character.FADE_SECONDS;
+    const remaining = Math.max(0, dur - a.time);
+    if (remaining > fade + 1e-6) return;
+    const outDuration = remaining > 1e-6 ? remaining : fade;
+    a.fadeOut(outDuration);
+    this._punchEndFadeScheduled = true;
+  }
+
   private setupAnimationLayers(clips: PlayerClips): void {
+    // Base layer with foot locomotion
     const baseLayer = this.mixer.addLayer('base');
 
     if (clips.idleClip) {
@@ -151,7 +189,6 @@ export default class Character {
     }
     if (clips.walkingClip) {
       this.walkingAction = baseLayer.clipAction(clips.walkingClip);
-      // this.walkingAction.loop = THREE.LoopRepeat;
     }
     if (clips.runningClip) {
       this.runningAction = baseLayer.clipAction(clips.runningClip);
@@ -183,11 +220,32 @@ export default class Character {
 
 
     if (this.idleAction && this.walkingAction && this.runningAction) {
-      this.locomotionBlend = new BlendTree1D(
+      this.locomotionBlend = new AnimationBlendTree1D(
         [this.idleAction, this.walkingAction, this.runningAction],
         [0, 0.5, 1],
       );
-      this.locomotionBlend.updateWeights(0);
+    }
+
+    // Upper body layer with punch
+    const upperBodyMask = new AnimationLayerMask({
+      'mixamorigSpine.quaternion': 1,
+      'mixamorigSpine1.quaternion': 1,
+      'mixamorigSpine2.quaternion': 1,
+      'mixamorigNeck.quaternion': 1,
+      'mixamorigHead.quaternion': 1,
+      'mixamorigLeftShoulder.quaternion': 1,
+      'mixamorigLeftArm.quaternion': 1,
+      'mixamorigLeftForeArm.quaternion': 1,
+      'mixamorigLeftHand.quaternion': 1,
+      'mixamorigRightShoulder.quaternion': 1,
+      'mixamorigRightArm.quaternion': 1,
+      'mixamorigRightForeArm.quaternion': 1,
+      'mixamorigRightHand.quaternion': 1,
+    });
+    const overlayLayer = this.mixer.addLayer('overlay', { mask: upperBodyMask });
+    if (clips.punchClip) {
+      this.punchAction = overlayLayer.clipAction(clips.punchClip);
+      this.punchAction.loop = THREE.LoopOnce;
     }
   }
 

@@ -22,8 +22,8 @@ export default class InputManager {
   }
 
   private static locomotionSpeedFromKeys(): number {
-    if (InputManager.wHeld) return 1;
-    if (InputManager.eHeld) return 0.5;
+    if (InputManager.eHeld) return 1;
+    if (InputManager.wHeld) return 0.5;
     return 0;
   }
 
@@ -41,6 +41,8 @@ export default class InputManager {
     } else if (ev.key === 'e' || ev.key === 'E') {
       InputManager.eHeld = true;
       InputManager.syncLocomotionSpeed();
+    } else if (ev.key === ' ') {
+      GraphicsManager.character?.triggerPunch();
     }
   }
 
