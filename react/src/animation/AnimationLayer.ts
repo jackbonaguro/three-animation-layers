@@ -1,7 +1,8 @@
-import { AnimationClip, LinearInterpolant, Quaternion } from 'three';
+import { AnimationClip, Quaternion } from 'three';
 import { AnimationLayerMask } from './AnimationLayerMask';
 import { AnimationLayerAction } from './AnimationLayerAction';
 import type { AnimationLayerMixer } from './AnimationLayerMixer';
+import type { MutableLinearInterpolant } from './AnimationLayerTypes';
 
 export type LayerBlendMode = 'override' | 'additive';
 
@@ -49,7 +50,7 @@ export class AnimationLayer {
   private _sampledWeights = new Map<string, number>();
   private _mixer: AnimationLayerMixer | null = null;
 
-  private _weightInterpolant: LinearInterpolant | null = null;
+  private _weightInterpolant: MutableLinearInterpolant | null = null;
   private _effectiveLayerWeight = 1;
 
   constructor(

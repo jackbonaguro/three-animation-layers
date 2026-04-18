@@ -1,13 +1,13 @@
 import {
   AnimationClip,
   Interpolant,
-  LinearInterpolant,
   LoopRepeat,
   LoopPingPong,
   WrapAroundEnding,
   ZeroCurvatureEnding,
 } from 'three';
 import type { AnimationLayerMixer } from './AnimationLayerMixer';
+import type { KeyframeTrackWithCreateInterpolant, InterpolantWithSettings, MutableLinearInterpolant } from './AnimationLayerTypes';
 
 /**
  * Playback controller for a single {@link AnimationClip} within an
@@ -40,8 +40,8 @@ export class AnimationLayerAction {
   private _loopCount = 0;
   private _trackIndexMap: Map<string, number>;
 
-  private _weightInterpolant: LinearInterpolant | null = null;
-  private _timeScaleInterpolant: LinearInterpolant | null = null;
+  private _weightInterpolant: MutableLinearInterpolant | null = null;
+  private _timeScaleInterpolant: MutableLinearInterpolant | null = null;
   private _effectiveWeight = 0;
 
   private _startTime: number | null = null;
@@ -53,7 +53,7 @@ export class AnimationLayerAction {
   constructor(clip: AnimationClip, mixer: AnimationLayerMixer) {
     this.clip = clip;
     this._mixer = mixer;
-    const tracks = clip.tracks;
+    const tracks = clip.tracks as KeyframeTrackWithCreateInterpolant[];
 
     this.trackNames = tracks.map((t) => t.name);
     this.trackValueTypes = tracks.map((t) => t.ValueTypeName);
@@ -70,8 +70,8 @@ export class AnimationLayerAction {
     };
 
     this._interpolants = tracks.map((t) => {
-      const interp: Interpolant = (t as any).createInterpolant(undefined);
-      (interp as any).settings = this._interpolantSettings;
+      const interp = t.createInterpolant(undefined) as InterpolantWithSettings;
+      interp.settings = this._interpolantSettings;
       return interp;
     });
 

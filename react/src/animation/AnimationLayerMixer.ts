@@ -1,7 +1,7 @@
 import { KeyframeTrack, LinearInterpolant, Object3D, PropertyBinding, Quaternion } from 'three';
 import { AnimationLayer, LayerBlendMode, slerpQuaternionInPlace } from './AnimationLayer';
 import { AnimationLayerMask } from './AnimationLayerMask';
-import type { AnimationLayerAction } from './AnimationLayerAction';
+import type { MutablePropertyBinding, MutableLinearInterpolant } from './AnimationLayerTypes';
 
 const _controlInterpolantsResultBuffer = new Float32Array(1);
 
@@ -21,7 +21,7 @@ export interface LayerOptions {
 interface TrackInfo {
   name: string;
   /** PropertyBinding with runtime-bound getValue / setValue (untyped). */
-  binding: any;
+  binding: MutablePropertyBinding;
   valueType: string;
   valueSize: number;
   /** Rest / bind-pose value captured at registration time. */
@@ -53,7 +53,7 @@ export class AnimationLayerMixer {
   private _quatWork = new Float64Array(4);
 
   /** Pooled weight-fade interpolants; same pattern as Three's AnimationMixer. */
-  private _controlInterpolants: LinearInterpolant[] = [];
+  private _controlInterpolants: MutableLinearInterpolant[] = [];
   private _nActiveControlInterpolants = 0;
 
   constructor(root: Object3D) {
@@ -143,7 +143,7 @@ export class AnimationLayerMixer {
    * @internal Used by {@link AnimationLayerAction} and {@link AnimationLayer} for weight/time-scale fade curves.
    * Mirrors Three's AnimationMixer._lendControlInterpolant.
    */
-  _lendControlInterpolant(): LinearInterpolant {
+  _lendControlInterpolant(): MutableLinearInterpolant {
     const pool = this._controlInterpolants;
     const idx = this._nActiveControlInterpolants++;
     let interp = pool[idx];
@@ -151,22 +151,22 @@ export class AnimationLayerMixer {
       interp = new LinearInterpolant(
         new Float32Array(2), new Float32Array(2),
         1, _controlInterpolantsResultBuffer,
-      );
-      (interp as any).__cacheIndex = idx;
+      ) as MutableLinearInterpolant;
+      interp.__cacheIndex = idx;
       pool[idx] = interp;
     }
     return interp;
   }
 
   /** @internal */
-  _takeBackControlInterpolant(interp: LinearInterpolant): void {
+  _takeBackControlInterpolant(interp: MutableLinearInterpolant): void {
     const pool = this._controlInterpolants;
-    const prevIdx = (interp as any).__cacheIndex;
+    const prevIdx = interp.__cacheIndex;
     const firstInactive = --this._nActiveControlInterpolants;
     const last = pool[firstInactive];
-    (interp as any).__cacheIndex = firstInactive;
+    interp.__cacheIndex = firstInactive;
     pool[firstInactive] = interp;
-    (last as any).__cacheIndex = prevIdx;
+    last.__cacheIndex = prevIdx;
     pool[prevIdx] = last;
   }
 
@@ -180,7 +180,7 @@ export class AnimationLayerMixer {
     for (const track of tracks) {
       if (this._trackInfos.has(track.name)) continue;
 
-      const binding = PropertyBinding.create(this.root, track.name);
+      const binding = PropertyBinding.create(this.root, track.name) as MutablePropertyBinding;
       const valueSize = track.getValueSize();
       const info: TrackInfo = {
         name: track.name,
@@ -193,7 +193,7 @@ export class AnimationLayerMixer {
 
       // Capture the bone's current transform as the rest-pose fallback.
       // The first getValue call triggers PropertyBinding.bind() internally.
-      (binding as any).getValue(info.originalValue, 0);
+      binding.getValue(info.originalValue, 0);
 
       this._trackInfos.set(track.name, info);
     }
@@ -231,7 +231,7 @@ export class AnimationLayerMixer {
       }
 
       // Write the final composed value to the scene graph.
-      (info.binding as any).setValue(info.composedValue, 0);
+      info.binding.setValue(info.composedValue, 0);
     });
   }
 
