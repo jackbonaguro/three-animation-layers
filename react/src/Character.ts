@@ -228,8 +228,6 @@ export default class Character {
 
     // Upper body layer with punch
     const upperBodyMask = new AnimationLayerMask({
-      'mixamorigSpine.quaternion': 1,
-      'mixamorigSpine1.quaternion': 1,
       'mixamorigSpine2.quaternion': 1,
       'mixamorigNeck.quaternion': 1,
       'mixamorigHead.quaternion': 1,
