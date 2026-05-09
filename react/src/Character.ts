@@ -113,7 +113,7 @@ export default class Character {
 
   /** Load an FBX rig (scale, shadows), extract clips, and construct the player. */
   static async loadFromFbx(
-    url = './character.fbx',
+    url = './characterWithUpperPunch.fbx',
     scale = 0.05,
   ): Promise<Character> {
     const rig = await Character.loadFbxRig(url, scale);
@@ -143,12 +143,11 @@ export default class Character {
 
   /** Build normalized clips from animations embedded on a loaded rig (e.g. FBX). */
   static extractClipsFromRig(rig: THREE.Object3D): PlayerClips {
-    // console.log(rig.animations);
     return {
       tposeClip: Character.nameToClip(rig, 'TPose'),
       idleClip: Character.nameToClip(rig, 'Idle'),
       runningClip: Character.nameToClip(rig, 'Running'),
-      punchClip: Character.nameToClip(rig, 'Punch_1'),
+      punchClip: Character.nameToClip(rig, 'Punch_UpperOnly'),
       walkingClip: Character.nameToClip(rig, 'mixamo.com'),
     };
   }
@@ -228,6 +227,8 @@ export default class Character {
 
     // Upper body layer with punch
     const upperBodyMask = new AnimationLayerMask({
+      'mixamorigSpine.quaternion': 1,
+      'mixamorigSpine1.quaternion': 1,
       'mixamorigSpine2.quaternion': 1,
       'mixamorigNeck.quaternion': 1,
       'mixamorigHead.quaternion': 1,
@@ -279,6 +280,7 @@ export default class Character {
       }
       filteredTracks.push(hipsPositionTrack);
     }
+
     clip.tracks = filteredTracks;
     return clip;
   }
