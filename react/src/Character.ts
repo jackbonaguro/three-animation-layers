@@ -113,18 +113,12 @@ export default class Character {
 
   /** Load an FBX rig (scale, shadows), extract clips, and construct the player. */
   static async loadFromFbx(
-    url = './characterWithUpperPunch.fbx',
+    url = './character.fbx',
     scale = 0.05,
   ): Promise<Character> {
     const rig = await Character.loadFbxRig(url, scale);
-    const walking = await Character.loadFbxRig('./Walking.fbx', scale);
     const clips = Character.extractClipsFromRig(rig);
-    const { walkingClip } = Character.extractClipsFromRig(walking);
-    const mergedClips = {
-      ...clips,
-      walkingClip,
-    };
-    return new Character(rig, mergedClips);
+    return new Character(rig, clips);
   }
 
   private static async loadFbxRig(url: string, scale: number): Promise<THREE.Group> {
@@ -144,11 +138,10 @@ export default class Character {
   /** Build normalized clips from animations embedded on a loaded rig (e.g. FBX). */
   static extractClipsFromRig(rig: THREE.Object3D): PlayerClips {
     return {
-      tposeClip: Character.nameToClip(rig, 'TPose'),
       idleClip: Character.nameToClip(rig, 'Idle'),
       runningClip: Character.nameToClip(rig, 'Running'),
       punchClip: Character.nameToClip(rig, 'Punch_UpperOnly'),
-      walkingClip: Character.nameToClip(rig, 'mixamo.com'),
+      walkingClip: Character.nameToClip(rig, 'Walking'),
     };
   }
 
