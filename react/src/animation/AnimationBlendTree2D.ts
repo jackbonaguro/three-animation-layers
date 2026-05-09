@@ -43,7 +43,7 @@ export class AnimationBlendTree2D {
      * @returns 
      */
     _convertToInfluenceVector(pi: Vector2, pj: Vector2){
-        const x=(pj.length()-pi.length())/((pj.length()+pi.length())/2);
+        const x=pj.length()-pi.length();
         const y = signedAngleTo(pj,pi) * 2;
         return new Vector2(x,y);
     }
@@ -68,18 +68,19 @@ export class AnimationBlendTree2D {
      * @param {Vector2} value 
      */
     updateWeights(value: Vector2){
+        // Clamp each clip's influence to >=0 BEFORE summing. The original
+        // version summed raw influences (which can be negative for far-side
+        // clips) and then clamped each weight to [0,1] after dividing, which
+        // masks weights blowing past 1 when the denominator is small/negative.
         let sum=0;
-        //bonus fun fact, did you know in most modern browsers, forEach is faster than for...of? 
-        //for every animation action, calculate the influence for the given value to find the weight (also sum the weights for normalization)
         const hips=this.thresholds.map((t,i)=>{
-
-            const infl = this._findInfluence(value,i)
+            const infl = Math.max(0, this._findInfluence(value,i));
             sum+=infl;
             return infl;
         });
-        //normalize the weights
+        if(sum<=0) return;
         this.actions.forEach((action,i)=>{
-            action.setEffectiveWeight(Math.max(0,Math.min(1,hips[i]/sum)));
+            action.setEffectiveWeight(hips[i]/sum);
         });
     }
 }

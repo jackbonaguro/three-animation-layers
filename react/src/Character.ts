@@ -1,15 +1,7 @@
 import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader';
-import { AnimationLayerMixer, AnimationLayerAction, AnimationBlendTree1D, AnimationLayerMask } from './animation';
+import { AnimationLayerMixer, AnimationLayerAction, AnimationBlendTree2D, AnimationLayerMask } from './animation';
 import { SkeletonHelper } from 'three';
-
-export type PlayerClips = {
-  tposeClip?: THREE.AnimationClip;
-  idleClip?: THREE.AnimationClip;
-  runningClip?: THREE.AnimationClip;
-  punchClip?: THREE.AnimationClip;
-  walkingClip?: THREE.AnimationClip;
-};
 
 /**
  * Animated character: rig root, {@link AnimationLayerMixer}, and layered clip setup.
@@ -27,20 +19,27 @@ export default class Character {
    */
   static readonly LOCOMOTION_SPEED_SMOOTHING = 0.2;
 
-  private locomotionBlend: AnimationBlendTree1D | null = null;
+  private locomotionBlend: AnimationBlendTree2D | null = null;
   private idleAction: AnimationLayerAction | null = null;
   private walkingAction: AnimationLayerAction | null = null;
   private runningAction: AnimationLayerAction | null = null;
+  private strafeLeftAction: AnimationLayerAction | null = null;
+  private strafeRightAction: AnimationLayerAction | null = null;
+
   private punchAction: AnimationLayerAction | null = null;
   /** Punch outro: avoid scheduling fadeOut(remaining) more than once per swing. */
   private _punchEndFadeScheduled = false;
 
   /** Keyboard / gameplay target in [0, 1]. */
   private _locomotionSpeedTarget = 0;
-  /** Smoothed value passed to {@link AnimationBlendTree1D#updateWeights}. */
+  /** Smoothed value passed to {@link AnimationBlendTree2D#updateWeights} x. */
   private _locomotionSpeed = 0;
+  /** Target strafe in [-1, 1] (negative = left, positive = right). */
+  private _locomotionStrafeTarget = 0;
+  /** Smoothed strafe passed to {@link AnimationBlendTree2D#updateWeights} y. */
+  private _locomotionStrafe = 0;
 
-  constructor(rig: THREE.Object3D, clips: PlayerClips) {
+  constructor(rig: THREE.Object3D, clips: Record<string, THREE.AnimationClip>) {
     this.rig = rig;
     this.mixer = new AnimationLayerMixer(rig);
     this.setupAnimationLayers(clips);
@@ -62,11 +61,19 @@ export default class Character {
         this._locomotionSpeedTarget,
         t,
       );
+      this._locomotionStrafe = THREE.MathUtils.lerp(
+        this._locomotionStrafe,
+        this._locomotionStrafeTarget,
+        t,
+      );
     } else {
       this._locomotionSpeed = this._locomotionSpeedTarget;
+      this._locomotionStrafe = this._locomotionStrafeTarget;
     }
 
-    this.locomotionBlend?.updateWeights(this._locomotionSpeed);
+    this.locomotionBlend?.updateWeights(
+      new THREE.Vector2(this._locomotionSpeed, this._locomotionStrafe),
+    );
     this.applyLocomotionPhaseTimeScale();
 
     this.syncPunchOutroFade();
@@ -86,7 +93,7 @@ export default class Character {
    */
   private applyLocomotionPhaseTimeScale(): void {
     if (!this.idleAction) return;
-    const s = this._locomotionSpeed;
+    const s = Math.hypot(this._locomotionSpeed, this._locomotionStrafe);
     if (s <= 0) {
       this.idleAction.setEffectiveTimeScale(1);
       return;
@@ -96,19 +103,25 @@ export default class Character {
     const cadenceMul =
       dIdle > 0 && dRun > 0 ? dIdle / dRun : 1;
     const motionTs = s * cadenceMul;
-    // Same idle→walk edge as BlendTree1D thresholds [0, 0.5, 1]: idle weight is
-    // (0.5 - s) / 0.5 on [0, 0.5], 0 after.
+    // Match the old BlendTree1D edge: idle weight is (0.5 - s) / 0.5 on
+    // [0, 0.5], 0 after. Generalises naturally to magnitude since both walk
+    // and the (now matching-magnitude) strafe thresholds sit at length 0.5.
     const idleW = s >= 0.5 ? 0 : (0.5 - s) / 0.5;
     const ts = THREE.MathUtils.lerp(motionTs, 1, idleW);
     this.idleAction.setEffectiveTimeScale(ts);
   }
 
   /**
-   * Sets the locomotion blend target (0 idle, 0.5 punch, 1 run). The value
-   * actually used by the blend tree eases toward this each frame.
+   * Sets the forward blend target (0 idle, 0.5 walk, 1 run). The value used by
+   * the blend tree eases toward this each frame.
    */
   setLocomotionSpeed(speed: number): void {
     this._locomotionSpeedTarget = speed;
+  }
+
+  /** Strafe blend parameter in [-1, 1]: left … center … right. */
+  setLocomotionStrafe(strafe: number): void {
+    this._locomotionStrafeTarget = THREE.MathUtils.clamp(strafe, -1, 1);
   }
 
   /** Load an FBX rig (scale, shadows), extract clips, and construct the player. */
@@ -136,13 +149,16 @@ export default class Character {
   }
 
   /** Build normalized clips from animations embedded on a loaded rig (e.g. FBX). */
-  static extractClipsFromRig(rig: THREE.Object3D): PlayerClips {
-    return {
-      idleClip: Character.nameToClip(rig, 'Idle'),
-      runningClip: Character.nameToClip(rig, 'Running'),
-      punchClip: Character.nameToClip(rig, 'Punch_UpperOnly'),
-      walkingClip: Character.nameToClip(rig, 'Walking'),
-    };
+  static extractClipsFromRig(rig: THREE.Object3D): Record<string, THREE.AnimationClip> {
+    const clipNames = ['Idle', 'Running', 'Punch_UpperOnly', 'Walking', 'Strafe_Left', 'Strafe_Right'];
+    const clips: Record<string, THREE.AnimationClip> = {};
+    for (const name of clipNames) {
+      const clip = Character.nameToClip(rig, name);
+      if (clip) {
+        clips[name] = clip;
+      }
+    }
+    return clips;
   }
 
   triggerPunch(): void {
@@ -171,19 +187,25 @@ export default class Character {
     this._punchEndFadeScheduled = true;
   }
 
-  private setupAnimationLayers(clips: PlayerClips): void {
+  private setupAnimationLayers(clips: Record<string, THREE.AnimationClip>): void {
     // Base layer with foot locomotion
     const baseLayer = this.mixer.addLayer('base');
 
-    if (clips.idleClip) {
-      this.idleAction = baseLayer.clipAction(clips.idleClip);
+    if (clips['Idle']) {
+      this.idleAction = baseLayer.clipAction(clips['Idle']);
       this.idleAction.play();
     }
-    if (clips.walkingClip) {
-      this.walkingAction = baseLayer.clipAction(clips.walkingClip);
+    if (clips['Walking']) {
+      this.walkingAction = baseLayer.clipAction(clips['Walking']);
     }
-    if (clips.runningClip) {
-      this.runningAction = baseLayer.clipAction(clips.runningClip);
+    if (clips['Running']) {
+      this.runningAction = baseLayer.clipAction(clips['Running']);
+    }
+    if (clips['Strafe_Left']) {
+      this.strafeLeftAction = baseLayer.clipAction(clips['Strafe_Left']);
+    }
+    if (clips['Strafe_Right']) {
+      this.strafeRightAction = baseLayer.clipAction(clips['Strafe_Right']);
     }
 
     if (clips.punchClip) {
@@ -210,11 +232,36 @@ export default class Character {
       this.punchAction.clampWhenFinished = true;
     }
 
-
-    if (this.idleAction && this.walkingAction && this.runningAction) {
-      this.locomotionBlend = new AnimationBlendTree1D(
-        [this.idleAction, this.walkingAction, this.runningAction],
-        [0, 0.5, 1],
+    // Blend space is a (forward, strafe) velocity vector. Each threshold sits
+    // at the velocity its clip is authored for:
+    //   idle    (0,    0)    – stationary
+    //   walk    (0.5,  0)    – forward at walk speed
+    //   run    (1,    0)    – forward at run speed
+    //   strafe ±(0, 0.5)    – sideways at walk speed (the clips' authored pace)
+    // Walk and strafe sit at the same magnitude (0.5) so a pure A maps to its
+    // strafe threshold cleanly and W+A produces a real diagonal blend.
+    if (
+      this.idleAction &&
+      this.walkingAction &&
+      this.runningAction &&
+      this.strafeLeftAction &&
+      this.strafeRightAction
+    ) {
+      this.locomotionBlend = new AnimationBlendTree2D(
+        [
+          this.idleAction,
+          this.walkingAction,
+          this.runningAction,
+          this.strafeLeftAction,
+          this.strafeRightAction,
+        ],
+        [
+          new THREE.Vector2(0, 0),
+          new THREE.Vector2(0.5, 0),
+          new THREE.Vector2(1, 0),
+          new THREE.Vector2(0, -0.5),
+          new THREE.Vector2(0, 0.5),
+        ],
       );
     }
 
@@ -235,8 +282,8 @@ export default class Character {
       'mixamorigRightHand.quaternion': 1,
     });
     const overlayLayer = this.mixer.addLayer('overlay', { mask: upperBodyMask });
-    if (clips.punchClip) {
-      this.punchAction = overlayLayer.clipAction(clips.punchClip);
+    if (clips['Punch_UpperOnly']) {
+      this.punchAction = overlayLayer.clipAction(clips['Punch_UpperOnly']);
       this.punchAction.loop = THREE.LoopOnce;
     }
   }
