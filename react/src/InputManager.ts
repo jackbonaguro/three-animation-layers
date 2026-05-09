@@ -1,17 +1,17 @@
 import GraphicsManager from './GraphicsManager';
 
 /**
- * Keyboard input for the demo. W/A/D pick a movement direction; E is a speed
- * modifier (walk → run). E alone with no direction key is idle.
+ * Keyboard input for the demo. W/A/D pick a movement direction; Shift toggles
+ * sprint. Shift alone with no direction key is idle.
+ *
+ * Sets {@link Character.setMovementDirection} (an angle, or null when no
+ * direction key is held) and {@link Character.setSprinting} on the active
+ * character — Character handles the polar→cartesian conversion into the
+ * blend tree's (forward, strafe) coordinates.
  */
 export default class InputManager {
-  /** Forward velocity at the "walk" tier, matching the walk threshold's x. */
-  private static readonly WALK_SPEED = 0.5;
-  /** Forward velocity at the "run" tier, matching the run threshold's x. */
-  private static readonly RUN_SPEED = 1;
-
   private static wHeld = false;
-  private static eHeld = false;
+  private static shiftHeld = false;
   private static aHeld = false;
   private static dHeld = false;
 
@@ -24,36 +24,28 @@ export default class InputManager {
     window.removeEventListener('keydown', InputManager.onKeyDown);
     window.removeEventListener('keyup', InputManager.onKeyUp);
     InputManager.wHeld = false;
-    InputManager.eHeld = false;
+    InputManager.shiftHeld = false;
     InputManager.aHeld = false;
     InputManager.dHeld = false;
-    GraphicsManager.setLocomotionSpeed(0);
-    GraphicsManager.setLocomotionStrafe(0);
+    InputManager.syncLocomotion();
   }
 
   /**
-   * Resolve held keys to a (forward, strafe) velocity vector. Direction comes
-   * from W/A/D; magnitude is walk- or run-speed depending on E. With no
-   * direction key the magnitude is zero so we sit at idle regardless of E.
+   * Resolve held W/A/D to an angle in radians (0 forward, +π/2 right, −π/2 left),
+   * or `null` if no direction key is held.
    */
-  private static locomotionVelocityFromKeys(): { x: number; y: number } {
-    let dx = 0;
-    let dy = 0;
-    if (InputManager.wHeld) dx += 1;
-    if (InputManager.aHeld) dy -= 1;
-    if (InputManager.dHeld) dy += 1;
-    const len = Math.hypot(dx, dy);
-    if (len === 0) return { x: 0, y: 0 };
-    const speed = InputManager.eHeld
-      ? InputManager.RUN_SPEED
-      : InputManager.WALK_SPEED;
-    return { x: (dx / len) * speed, y: (dy / len) * speed };
+  private static directionFromKeys(): number | null {
+    const dx = InputManager.wHeld ? 1 : 0;
+    const dy = (InputManager.dHeld ? 1 : 0) - (InputManager.aHeld ? 1 : 0);
+    if (dx === 0 && dy === 0) return null;
+    return Math.atan2(dy, dx);
   }
 
   private static syncLocomotion(): void {
-    const v = InputManager.locomotionVelocityFromKeys();
-    GraphicsManager.setLocomotionSpeed(v.x);
-    GraphicsManager.setLocomotionStrafe(v.y);
+    const character = GraphicsManager.character;
+    if (!character) return;
+    character.setMovementDirection(InputManager.directionFromKeys());
+    character.setSprinting(InputManager.shiftHeld);
   }
 
   private static onKeyDown(ev: KeyboardEvent): void {
@@ -63,8 +55,8 @@ export default class InputManager {
     if (ev.key === 'w' || ev.key === 'W') {
       InputManager.wHeld = true;
       InputManager.syncLocomotion();
-    } else if (ev.key === 'e' || ev.key === 'E') {
-      InputManager.eHeld = true;
+    } else if (ev.key === 'Shift') {
+      InputManager.shiftHeld = true;
       InputManager.syncLocomotion();
     } else if (ev.key === 'a' || ev.key === 'A') {
       InputManager.aHeld = true;
@@ -84,8 +76,8 @@ export default class InputManager {
     if (ev.key === 'w' || ev.key === 'W') {
       InputManager.wHeld = false;
       InputManager.syncLocomotion();
-    } else if (ev.key === 'e' || ev.key === 'E') {
-      InputManager.eHeld = false;
+    } else if (ev.key === 'Shift') {
+      InputManager.shiftHeld = false;
       InputManager.syncLocomotion();
     } else if (ev.key === 'a' || ev.key === 'A') {
       InputManager.aHeld = false;

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader';
 import { AnimationLayerMixer, AnimationLayerAction, AnimationBlendTree2D, AnimationLayerMask } from './animation';
 import { SkeletonHelper } from 'three';
+import { DampedValue } from './DampedValue';
 
 /**
  * Animated character: rig root, {@link AnimationLayerMixer}, and layered clip setup.
@@ -19,6 +20,11 @@ export default class Character {
    */
   static readonly LOCOMOTION_SPEED_SMOOTHING = 0.2;
 
+  /** Magnitude of the (forward, strafe) target while walking. Matches the walk threshold's distance from idle. */
+  static readonly WALK_SPEED = 0.5;
+  /** Magnitude of the (forward, strafe) target while sprinting. Matches the run threshold's distance from idle. */
+  static readonly RUN_SPEED = 1;
+
   private locomotionBlend: AnimationBlendTree2D | null = null;
   private idleAction: AnimationLayerAction | null = null;
   private walkingAction: AnimationLayerAction | null = null;
@@ -30,14 +36,18 @@ export default class Character {
   /** Punch outro: avoid scheduling fadeOut(remaining) more than once per swing. */
   private _punchEndFadeScheduled = false;
 
-  /** Keyboard / gameplay target in [0, 1]. */
-  private _locomotionSpeedTarget = 0;
-  /** Smoothed value passed to {@link AnimationBlendTree2D#updateWeights} x. */
-  private _locomotionSpeed = 0;
-  /** Target strafe in [-1, 1] (negative = left, positive = right). */
-  private _locomotionStrafeTarget = 0;
-  /** Smoothed strafe passed to {@link AnimationBlendTree2D#updateWeights} y. */
-  private _locomotionStrafe = 0;
+  /**
+   * Movement angle (radians) in the locomotion plane: 0 = forward, +π/2 = right,
+   * −π/2 = left. `null` = not moving (stationary regardless of {@link _sprinting}).
+   */
+  private _movementDirection: number | null = null;
+  /** When true, movement uses {@link RUN_SPEED} instead of {@link WALK_SPEED}. */
+  private _sprinting = false;
+
+  /** Smoothed forward component, fed into {@link AnimationBlendTree2D#updateWeights} x. */
+  private _locomotionVelocityY = new DampedValue(0, Character.LOCOMOTION_SPEED_SMOOTHING);
+  /** Smoothed strafe component, fed into {@link AnimationBlendTree2D#updateWeights} y. */
+  private _locomotionVelocityX = new DampedValue(0, Character.LOCOMOTION_SPEED_SMOOTHING);
 
   constructor(rig: THREE.Object3D, clips: Record<string, THREE.AnimationClip>) {
     this.rig = rig;
@@ -52,27 +62,19 @@ export default class Character {
   }
 
   update(deltaSeconds: number): void {
-    const tau = Character.LOCOMOTION_SPEED_SMOOTHING;
-    if (tau > 0 && deltaSeconds > 0) {
-      const k = 1 / tau;
-      const t = 1 - Math.exp(-k * deltaSeconds);
-      this._locomotionSpeed = THREE.MathUtils.lerp(
-        this._locomotionSpeed,
-        this._locomotionSpeedTarget,
-        t,
-      );
-      this._locomotionStrafe = THREE.MathUtils.lerp(
-        this._locomotionStrafe,
-        this._locomotionStrafeTarget,
-        t,
-      );
+    if (this._movementDirection !== null) {
+      const magnitude = this._sprinting ? Character.RUN_SPEED : Character.WALK_SPEED;
+      this._locomotionVelocityY.target = Math.cos(this._movementDirection) * magnitude;
+      this._locomotionVelocityX.target = Math.sin(this._movementDirection) * magnitude;
     } else {
-      this._locomotionSpeed = this._locomotionSpeedTarget;
-      this._locomotionStrafe = this._locomotionStrafeTarget;
+      this._locomotionVelocityY.target = 0;
+      this._locomotionVelocityX.target = 0;
     }
+    this._locomotionVelocityY.update(deltaSeconds);
+    this._locomotionVelocityX.update(deltaSeconds);
 
     this.locomotionBlend?.updateWeights(
-      new THREE.Vector2(this._locomotionSpeed, this._locomotionStrafe),
+      new THREE.Vector2(this._locomotionVelocityY.value, this._locomotionVelocityX.value),
     );
     this.applyLocomotionPhaseTimeScale();
 
@@ -87,13 +89,13 @@ export default class Character {
    * Walk/run are synced to idle's cycle phase, so only idle's clock advances the
    * whole locomotion stack. Scale that root so full run matches the run clip's
    * natural rate (idle/run duration ratio), while idle stays ~1x: smoothed
-   * {@link _locomotionSpeed} lingers near 0 for a long time, and raw
+   * {@link _locomotionVelocityY} lingers near 0 for a long time, and raw
    * `s * cadenceMul` would drag the shared clock to a crawl even when the blend
    * is still almost entirely idle.
    */
   private applyLocomotionPhaseTimeScale(): void {
     if (!this.idleAction) return;
-    const s = Math.hypot(this._locomotionSpeed, this._locomotionStrafe);
+    const s = Math.hypot(this._locomotionVelocityY.value, this._locomotionVelocityX.value);
     if (s <= 0) {
       this.idleAction.setEffectiveTimeScale(1);
       return;
@@ -112,16 +114,18 @@ export default class Character {
   }
 
   /**
-   * Sets the forward blend target (0 idle, 0.5 walk, 1 run). The value used by
-   * the blend tree eases toward this each frame.
+   * Sets the movement direction in radians (0 = forward, +π/2 = right,
+   * −π/2 = left). Pass `null` to stop moving (idle). The smoothed
+   * (forward, strafe) components fed into the blend tree are derived from
+   * this and {@link _sprinting} each frame in {@link update}.
    */
-  setLocomotionSpeed(speed: number): void {
-    this._locomotionSpeedTarget = speed;
+  setMovementDirection(radians: number | null): void {
+    this._movementDirection = radians;
   }
 
-  /** Strafe blend parameter in [-1, 1]: left … center … right. */
-  setLocomotionStrafe(strafe: number): void {
-    this._locomotionStrafeTarget = THREE.MathUtils.clamp(strafe, -1, 1);
+  /** Toggles the sprint modifier. Direction is unchanged. */
+  setSprinting(sprinting: boolean): void {
+    this._sprinting = sprinting;
   }
 
   /** Load an FBX rig (scale, shadows), extract clips, and construct the player. */

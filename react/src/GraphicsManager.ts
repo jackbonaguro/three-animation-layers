@@ -11,16 +11,6 @@ export default class GraphicsManager {
   static controls: OrbitControls;
   static character: Character | null = null;
 
-  /** Locomotion blend target: 0 = idle, 0.5 = walk, 1 = run (smoothed in {@link Character.update}). */
-  static setLocomotionSpeed(speed: number): void {
-    GraphicsManager.character?.setLocomotionSpeed(speed);
-  }
-
-  /** Strafe blend target in [-1, 1] (smoothed in {@link Character.update}). */
-  static setLocomotionStrafe(strafe: number): void {
-    GraphicsManager.character?.setLocomotionStrafe(strafe);
-  }
-
   static async initialize(domElement: HTMLElement) {
     this.initialized = true;
 
