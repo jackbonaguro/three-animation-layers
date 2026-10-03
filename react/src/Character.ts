@@ -4,6 +4,8 @@ import { AnimationLayerMixer, AnimationLayerAction, AnimationBlendTree2D, Animat
 import { SkeletonHelper } from 'three';
 import { DampedValue } from './DampedValue';
 
+const ATTACK_CLIP_NAME = 'Swing';
+
 /**
  * Animated character: rig root, {@link AnimationLayerMixer}, and layered clip setup.
  */
@@ -32,9 +34,9 @@ export default class Character {
   private strafeLeftAction: AnimationLayerAction | null = null;
   private strafeRightAction: AnimationLayerAction | null = null;
 
-  private punchAction: AnimationLayerAction | null = null;
-  /** Punch outro: avoid scheduling fadeOut(remaining) more than once per swing. */
-  private _punchEndFadeScheduled = false;
+  private attackAction: AnimationLayerAction | null = null;
+  /** Attack outro: avoid scheduling fadeOut(remaining) more than once per swing. */
+  private _attackEndFadeScheduled = false;
 
   /**
    * Movement angle (radians) in the locomotion plane: 0 = forward, +π/2 = right,
@@ -78,11 +80,11 @@ export default class Character {
     );
     this.applyLocomotionPhaseTimeScale();
 
-    this.syncPunchOutroFade();
+    this.syncAttackOutroFade();
 
     this.mixer.update(deltaSeconds);
 
-    this.syncPunchOutroFade();
+    this.syncAttackOutroFade();
   }
 
   /**
@@ -154,7 +156,7 @@ export default class Character {
 
   /** Build normalized clips from animations embedded on a loaded rig (e.g. FBX). */
   static extractClipsFromRig(rig: THREE.Object3D): Record<string, THREE.AnimationClip> {
-    const clipNames = ['Idle', 'Running', 'Punch_1', 'Walking', 'Strafe_Left', 'Strafe_Right'];
+    const clipNames = ['Idle', 'Running', 'Walking', 'Strafe_Left', 'Strafe_Right', ATTACK_CLIP_NAME];
     const clips: Record<string, THREE.AnimationClip> = {};
     for (const name of clipNames) {
       const clip = Character.nameToClip(rig, name);
@@ -165,11 +167,11 @@ export default class Character {
     return clips;
   }
 
-  triggerPunch(): void {
-    if (!this.punchAction) return;
-    this._punchEndFadeScheduled = false;
-    this.punchAction.reset();
-    this.punchAction.fadeIn(Character.FADE_SECONDS);
+  triggerAttack(): void {
+    if (!this.attackAction) return;
+    this._attackEndFadeScheduled = false;
+    this.attackAction.reset();
+    this.attackAction.fadeIn(Character.FADE_SECONDS);
   }
 
   /**
@@ -178,9 +180,9 @@ export default class Character {
    * already parked on the last frame (`remaining === 0`), fade over
    * {@link FADE_SECONDS} on the held pose (large-dt fallback).
    */
-  private syncPunchOutroFade(): void {
-    const a = this.punchAction;
-    if (!a || !a.enabled || this._punchEndFadeScheduled) return;
+  private syncAttackOutroFade(): void {
+    const a = this.attackAction;
+    if (!a || !a.enabled || this._attackEndFadeScheduled) return;
     const dur = a.clip.duration;
     if (dur <= 0) return;
     const fade = Character.FADE_SECONDS;
@@ -188,7 +190,7 @@ export default class Character {
     if (remaining > fade + 1e-6) return;
     const outDuration = remaining > 1e-6 ? remaining : fade;
     a.fadeOut(outDuration);
-    this._punchEndFadeScheduled = true;
+    this._attackEndFadeScheduled = true;
   }
 
   private setupAnimationLayers(clips: Record<string, THREE.AnimationClip>): void {
@@ -212,7 +214,7 @@ export default class Character {
       this.strafeRightAction = baseLayer.clipAction(clips['Strafe_Right']);
     }
 
-    if (clips['Punch_1']) {
+    if (clips[ATTACK_CLIP_NAME]) {
       const upperBodyMask = new AnimationLayerMask({
         'mixamorigSpine.quaternion': 1,
         'mixamorigSpine1.quaternion': 1,
@@ -229,11 +231,12 @@ export default class Character {
         'mixamorigRightHand.quaternion': 1,
       });
 
-      // Mesh-space: the punch keeps the clip's own facing even while the base layer turns the hips.
-      const overlayLayer = this.mixer.addLayer('overlay', { mask: upperBodyMask, blendMode: 'override', blendSpace: 'mesh' });
-      this.punchAction = overlayLayer.clipAction(clips['Punch_1']);
-      this.punchAction.loop = THREE.LoopOnce;
-      this.punchAction.clampWhenFinished = true;
+      // Mesh-space: the attack keeps the clip's own facing even while the base layer turns the hips.
+      const upperBodyLayer = this.mixer.addLayer('upperBody', { mask: upperBodyMask, blendMode: 'override', blendSpace: 'mesh' });
+      this.attackAction = upperBodyLayer.clipAction(clips[ATTACK_CLIP_NAME]);
+      this.attackAction.loop = THREE.LoopOnce;
+      this.attackAction.clampWhenFinished = true;
+      this.attackAction.setDuration(clips[ATTACK_CLIP_NAME].duration / 2);
     }
 
     // Blend space is a (forward, strafe) velocity vector. Each threshold sits

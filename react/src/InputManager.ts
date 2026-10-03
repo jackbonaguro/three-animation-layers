@@ -65,7 +65,7 @@ export default class InputManager {
       InputManager.dHeld = true;
       InputManager.syncLocomotion();
     } else if (ev.key === ' ') {
-      GraphicsManager.character?.triggerPunch();
+      GraphicsManager.character?.triggerAttack();
     }
   }
 
