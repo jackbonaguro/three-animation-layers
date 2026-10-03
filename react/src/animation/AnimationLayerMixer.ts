@@ -1,13 +1,24 @@
 import { KeyframeTrack, LinearInterpolant, Object3D, PropertyBinding, Quaternion } from 'three';
-import { AnimationLayer, LayerBlendMode, slerpQuaternionInPlace } from './AnimationLayer';
+import { AnimationLayer, LayerBlendMode, LayerBlendSpace, slerpQuaternionInPlace } from './AnimationLayer';
 import { AnimationLayerMask } from './AnimationLayerMask';
 import type { MutablePropertyBinding, MutableLinearInterpolant } from './AnimationLayerTypes';
 
+/** Scratch buffers, reused to prevent huge # of allocations that need to be continuously GC'd. */
+// needed by the signature of LinearInterpolant; we then throw the result away
 const _controlInterpolantsResultBuffer = new Float32Array(1);
+// dst for additive quaternion blending, gets continuously overwritten
+const _quatWork = new Float64Array(4);
+// chain of objects traversed by _getMeshSpaceQuaternion up to the root
+const _chain: Object3D[] = [];
+// set of quaternions used in _blendMeshSpace
+const _qParentFlat = new Float64Array(4);
+const _qSourceFlat = new Float64Array(4);
+const _qTargetFlat = new Float64Array(4);
 
 export interface LayerOptions {
   mask?: AnimationLayerMask | null;
   blendMode?: LayerBlendMode;
+  blendSpace?: LayerBlendSpace;
 }
 
 // ---------------------------------------------------------------------------
@@ -22,6 +33,10 @@ interface TrackInfo {
   name: string;
   /** PropertyBinding with runtime-bound getValue / setValue (untyped). */
   binding: MutablePropertyBinding;
+  /** Object the track drives (null if the binding failed to resolve). */
+  node: Object3D | null;
+  /** Number of ancestors between `node` and the mixer root; parents compose before children. */
+  depth: number;
   valueType: string;
   valueSize: number;
   /** Rest / bind-pose value captured at registration time. */
@@ -49,8 +64,11 @@ export class AnimationLayerMixer {
 
   private _layers: AnimationLayer[] = [];
   private _trackInfos = new Map<string, TrackInfo>();
-  /** Scratch buffer for additive quaternion blending. */
-  private _quatWork = new Float64Array(4);
+
+  /** Same infos sorted by depth so ancestors are composed (and written) first. */
+  private _orderedTrackInfos: TrackInfo[] = [];
+  /** Quaternion track per animated object, for walking ancestor chains in mesh space. */
+  private _quaternionTrackByNode = new Map<Object3D, TrackInfo>();
 
   /** Pooled weight-fade interpolants; same pattern as Three's AnimationMixer. */
   private _controlInterpolants: MutableLinearInterpolant[] = [];
@@ -72,7 +90,8 @@ export class AnimationLayerMixer {
     const layer = new AnimationLayer(
       name,
       opts?.mask ?? null,
-      opts?.blendMode ?? 'override',
+      opts?.blendMode,
+      opts?.blendSpace,
     );
 
     layer._bindMixer(this);
@@ -185,6 +204,8 @@ export class AnimationLayerMixer {
       const info: TrackInfo = {
         name: track.name,
         binding,
+        node: null,
+        depth: 0,
         valueType: track.ValueTypeName,
         valueSize,
         originalValue: new Float64Array(valueSize),
@@ -195,8 +216,16 @@ export class AnimationLayerMixer {
       // The first getValue call triggers PropertyBinding.bind() internally.
       binding.getValue(info.originalValue, 0);
 
+      info.node = binding.node;
+      for (let n = info.node; n && n !== this.root; n = n.parent) info.depth++;
+      if (info.node && info.valueType === 'quaternion') {
+        this._quaternionTrackByNode.set(info.node, info);
+      }
+
       this._trackInfos.set(track.name, info);
+      this._orderedTrackInfos.push(info);
     }
+    this._orderedTrackInfos.sort((a, b) => a.depth - b.depth);
   }
 
   // ---------------------------------------------------------------------------
@@ -204,7 +233,8 @@ export class AnimationLayerMixer {
   // ---------------------------------------------------------------------------
 
   private _compose(): void {
-    this._trackInfos.forEach((info) => {
+    // Depth order: a mesh-space blend reads its ancestors' already-written rotations.
+    for (const info of this._orderedTrackInfos) {
       // Start from the rest / bind-pose value.
       info.composedValue.set(info.originalValue);
 
@@ -223,48 +253,156 @@ export class AnimationLayerMixer {
         const effectiveWeight = layerWeight * maskWeight * sampledWeight;
         if (effectiveWeight <= 0) continue;
 
-        if (layer.blendMode === 'override') {
-          this._blendOverride(info, layerValue, effectiveWeight);
+        if (layer.blendSpace === 'mesh') {
+          // unlike local blends, mesh-space blend will need the whole layer's data
+          this._blendMeshSpace(info, layer, layer.blendMode, effectiveWeight);
         } else {
-          this._blendAdditive(info, layerValue, effectiveWeight);
+          if (layer.blendMode === 'additive') {
+            this._blendAdditive(info, layerValue, effectiveWeight);
+          } else {
+            this._blendOverride(info, layerValue, effectiveWeight);
+          }
         }
       }
 
       // Write the final composed value to the scene graph.
       info.binding.setValue(info.composedValue, 0);
-    });
+    }
+  }
+
+  private _blendQuaternionFlatAdditive(dst: Float64Array, src: Float64Array, weight: number): void {
+    Quaternion.multiplyQuaternionsFlat(
+      _quatWork as unknown as number[], 0,
+      dst as unknown as number[], 0,
+      src as unknown as number[], 0,
+    );
+    slerpQuaternionInPlace(dst, _quatWork, weight);
+  }
+
+  private _blendQuaternionFlatOverride(dst: Float64Array, src: Float64Array, weight: number): void {
+    slerpQuaternionInPlace(dst, src, weight);
+  }
+
+  private _blendLinearAdditive(dst: Float64Array, src: Float64Array, size: number, weight: number): void {
+    for (let i = 0; i < size; i++) {
+      dst[i] += src[i] * weight;
+    }
+  }
+
+  private _blendLinearOverride(dst: Float64Array, src: Float64Array, size: number, weight: number): void {
+    for (let i = 0; i < size; i++) {
+      dst[i] += (src[i] - dst[i]) * weight;
+    }
   }
 
   private _blendOverride(info: TrackInfo, src: Float64Array, weight: number): void {
     const dst = info.composedValue;
     if (info.valueType === 'quaternion') {
-      slerpQuaternionInPlace(dst, src, weight);
+      this._blendQuaternionFlatOverride(dst, src, weight);
     } else {
-      for (let i = 0; i < info.valueSize; i++) {
-        dst[i] += (src[i] - dst[i]) * weight;
-      }
+      this._blendLinearOverride(dst, src, info.valueSize, weight);
     }
   }
 
   private _blendAdditive(info: TrackInfo, src: Float64Array, weight: number): void {
     const dst = info.composedValue;
     if (info.valueType === 'quaternion') {
-      const work = this._quatWork;
-      Quaternion.multiplyQuaternionsFlat(
-        work as unknown as number[], 0,
-        dst as unknown as number[], 0,
-        src as unknown as number[], 0,
-      );
-      Quaternion.slerpFlat(
-        dst as unknown as number[], 0,
-        dst as unknown as number[], 0,
-        work as unknown as number[], 0,
-        weight,
-      );
+      this._blendQuaternionFlatAdditive(dst, src, weight);
     } else {
-      for (let i = 0; i < info.valueSize; i++) {
-        dst[i] += src[i] * weight;
-      }
+      this._blendLinearAdditive(dst, src, info.valueSize, weight);
     }
+  }
+
+  /**
+   * Blend the bone's mesh-space (root-relative) rotation toward the mesh-space
+   * rotation the layer's clip alone would give it, then convert back to local.
+   * Ancestors have already been composed and written this frame, so their
+   * scene-graph quaternions are usable for the "composed" parent chain.
+   *
+   * NOTE: Sorry about the readability; this is optimized using flat arrays and in-place operations.
+   */
+  private _blendMeshSpace(info: TrackInfo, layer: AnimationLayer, blendMode: LayerBlendMode, weight: number): void {
+    const dst = info.composedValue;
+
+    if (info.valueType === 'quaternion') {
+      const node = info.node!;
+
+      // Since the data on the skeleton itself is in local space, first convert the current composed value to mesh space.
+      // Start by getting the parent's mesh space quaternion.
+      this._getMeshSpaceQuaternionFlat(
+        node.parent,
+        this._composedLocalFlat, // will accumulate transforms from the skeleton itself
+        _qParentFlat
+      );
+
+      // Then multiply it by the current local quaternion to get the mesh space quaternion.
+      // NOTE: This would be unnecessary as a separate step if we didn't also need the parent quaternion for later.
+      Quaternion.multiplyQuaternionsFlat(
+        _qSourceFlat as unknown as number[], 0,
+        _qParentFlat as unknown as number[], 0,
+        dst as unknown as number[], 0,
+      );
+
+      // Compute the target value in its own layer's mesh space, ignoring the effects of other layers.
+      this._getMeshSpaceQuaternionFlat(
+        node,
+        // Will accumulate transforms from the animation layer only.
+        // This is precisely what allows this layer to appear exactly as authored,
+        // by not even involving the effects of other layers.
+        (n) => this._layerLocalFlat(layer, n),
+        _qTargetFlat
+      );
+
+      // Finally interpolate the two values!
+      if (blendMode === 'override') {
+        this._blendQuaternionFlatOverride(_qSourceFlat, _qTargetFlat, weight);
+      } else {
+        this._blendQuaternionFlatAdditive(_qSourceFlat, _qTargetFlat, weight);
+      }
+
+      // Compute the difference between the original and target mesh space quaternions.
+      // Since the difference between parent mesh and local space applies to both, it factors out and
+      // the difference can be applied directly to the local quaternion.
+      Quaternion.multiplyQuaternionsFlat(
+        dst as unknown as number[], 0,
+        [
+          -_qParentFlat[0],
+          -_qParentFlat[1],
+          -_qParentFlat[2],
+          _qParentFlat[3],
+        ], 0,
+        _qSourceFlat as unknown as number[], 0,
+      );
+    }
+  }
+
+  /** Rotation of `node` relative to the mixer root, accumulating `local(n)` from the root down. */
+  private _getMeshSpaceQuaternionFlat(
+    node: Object3D | null,
+    local: (n: Object3D) => Float64Array,
+    out: Float64Array,
+  ): Float64Array {
+    _chain.length = 0;
+    for (let n = node; n && n !== this.root; n = n.parent) _chain.push(n);
+
+    out.set([0, 0, 0, 1]);
+    for (let i = _chain.length - 1; i >= 0; i--) {
+      Quaternion.multiplyQuaternionsFlat(
+        out as unknown as number[], 0,
+        out as unknown as number[], 0,
+        local(_chain[i]) as unknown as number[], 0,
+      );
+    }
+    return out;
+  }
+
+  // local transform on the actual skeleton itself, including mesh-space blends already applied
+  private _composedLocalFlat = (n: Object3D): Float64Array => new Float64Array(n.quaternion.toArray());
+
+  // local transform from the layer, never converted to mesh space
+  private _layerLocalFlat(layer: AnimationLayer, n: Object3D): Float64Array {
+    const info = this._quaternionTrackByNode.get(n);
+    if (!info) return new Float64Array(n.quaternion.toArray());
+    return layer.getSampledValue(info.name) ?? info.originalValue;
   }
 }

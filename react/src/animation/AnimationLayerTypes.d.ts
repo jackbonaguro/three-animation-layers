@@ -1,6 +1,8 @@
-import { PropertyBinding, LinearInterpolant, KeyframeTrack, Interpolant } from 'three';
+import { PropertyBinding, LinearInterpolant, KeyframeTrack, Interpolant, Object3D } from 'three';
 
 export type MutablePropertyBinding = PropertyBinding & {
+	/** Resolved target object, set once the binding has been bound. */
+	node: Object3D | null;
 	getValue: (dst: Float64Array, index: number) => void;
 	setValue: (src: Float64Array, index: number) => void;
 };

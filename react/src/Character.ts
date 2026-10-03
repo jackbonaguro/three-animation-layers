@@ -159,7 +159,8 @@ export default class Character {
         'mixamorigRightHand.quaternion': 1,
       });
 
-      this.overlayLayer = this.mixer.addLayer('overlay', { mask: upperBodyMask });
+      // Mesh-space: the punch keeps the clip's own facing even while the base layer turns the hips.
+      this.overlayLayer = this.mixer.addLayer('overlay', { mask: upperBodyMask, blendMode: 'override', blendSpace: 'mesh' });
       this.punchAction = this.overlayLayer.clipAction(clips.punchClip);
       this.punchAction.loop = THREE.LoopOnce;
       this.punchAction.clampWhenFinished = true;
@@ -170,6 +171,7 @@ export default class Character {
     fbx: THREE.Object3D,
     name: string,
   ): THREE.AnimationClip | undefined {
+    console.log(fbx.animations.map((a) => a.name));
     let clip = fbx.animations.find((a) => a.name.includes(name))?.clone();
     if (!clip) return;
     clip = Character.normalizeClip(clip);

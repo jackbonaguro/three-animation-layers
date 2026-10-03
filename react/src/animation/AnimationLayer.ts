@@ -7,6 +7,13 @@ import type { MutableLinearInterpolant } from './AnimationLayerTypes';
 export type LayerBlendMode = 'override' | 'additive';
 
 /**
+ * Which coordinate space to use for blending
+ * - `local`: blend toward the bone's transform relative to its immediate parent
+ * - `mesh`: blend toward the bone's transform relative to the mixer root
+ */
+export type LayerBlendSpace = 'local' | 'mesh';
+
+/**
  * A single priority level within a {@link AnimationLayerMixer}.
  *
  * Each layer holds one or more {@link AnimationLayerAction}s. During a mixer update
@@ -37,6 +44,8 @@ export class AnimationLayer {
 
   blendMode: LayerBlendMode;
 
+  blendSpace: LayerBlendSpace;
+
   private _actions: AnimationLayerAction[] = [];
 
   // Per-track blended value buffers, keyed by track name.  Re-used across frames.
@@ -57,10 +66,12 @@ export class AnimationLayer {
     name: string,
     mask: AnimationLayerMask | null = null,
     blendMode: LayerBlendMode = 'override',
+    blendSpace: LayerBlendSpace = 'local',
   ) {
     this.name = name;
     this.mask = mask;
     this.blendMode = blendMode;
+    this.blendSpace = blendSpace;
   }
 
   get actions(): readonly AnimationLayerAction[] {
@@ -306,6 +317,9 @@ export class AnimationLayer {
   }
 }
 
+// Note: It might seem redundant to have this function that just wraps a single method call,
+// but it makes the code much more readable. If you want, blame the base three.js for only
+// providing an in-place slerp function.
 export function slerpQuaternionInPlace(
   dst: Float64Array,
   src1: ArrayLike<number>,
