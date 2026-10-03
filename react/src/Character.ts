@@ -154,7 +154,7 @@ export default class Character {
 
   /** Build normalized clips from animations embedded on a loaded rig (e.g. FBX). */
   static extractClipsFromRig(rig: THREE.Object3D): Record<string, THREE.AnimationClip> {
-    const clipNames = ['Idle', 'Running', 'Punch_UpperOnly', 'Walking', 'Strafe_Left', 'Strafe_Right'];
+    const clipNames = ['Idle', 'Running', 'Punch_1', 'Walking', 'Strafe_Left', 'Strafe_Right'];
     const clips: Record<string, THREE.AnimationClip> = {};
     for (const name of clipNames) {
       const clip = Character.nameToClip(rig, name);
@@ -212,7 +212,7 @@ export default class Character {
       this.strafeRightAction = baseLayer.clipAction(clips['Strafe_Right']);
     }
 
-    if (clips.punchClip) {
+    if (clips['Punch_1']) {
       const upperBodyMask = new AnimationLayerMask({
         'mixamorigSpine.quaternion': 1,
         'mixamorigSpine1.quaternion': 1,
@@ -231,7 +231,7 @@ export default class Character {
 
       // Mesh-space: the punch keeps the clip's own facing even while the base layer turns the hips.
       const overlayLayer = this.mixer.addLayer('overlay', { mask: upperBodyMask, blendMode: 'override', blendSpace: 'mesh' });
-      this.punchAction = overlayLayer.clipAction(clips.punchClip);
+      this.punchAction = overlayLayer.clipAction(clips['Punch_1']);
       this.punchAction.loop = THREE.LoopOnce;
       this.punchAction.clampWhenFinished = true;
     }
@@ -268,35 +268,12 @@ export default class Character {
         ],
       );
     }
-
-    // Upper body layer with punch
-    const upperBodyMask = new AnimationLayerMask({
-      'mixamorigSpine.quaternion': 1,
-      'mixamorigSpine1.quaternion': 1,
-      'mixamorigSpine2.quaternion': 1,
-      'mixamorigNeck.quaternion': 1,
-      'mixamorigHead.quaternion': 1,
-      'mixamorigLeftShoulder.quaternion': 1,
-      'mixamorigLeftArm.quaternion': 1,
-      'mixamorigLeftForeArm.quaternion': 1,
-      'mixamorigLeftHand.quaternion': 1,
-      'mixamorigRightShoulder.quaternion': 1,
-      'mixamorigRightArm.quaternion': 1,
-      'mixamorigRightForeArm.quaternion': 1,
-      'mixamorigRightHand.quaternion': 1,
-    });
-    const overlayLayer = this.mixer.addLayer('overlay', { mask: upperBodyMask });
-    if (clips['Punch_UpperOnly']) {
-      this.punchAction = overlayLayer.clipAction(clips['Punch_UpperOnly']);
-      this.punchAction.loop = THREE.LoopOnce;
-    }
   }
 
   private static nameToClip(
     fbx: THREE.Object3D,
     name: string,
   ): THREE.AnimationClip | undefined {
-    console.log(fbx.animations.map((a) => a.name));
     let clip = fbx.animations.find((a) => a.name.includes(name))?.clone();
     if (!clip) return;
     clip = Character.normalizeClip(clip);
