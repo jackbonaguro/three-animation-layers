@@ -84,14 +84,12 @@ export default class Character {
 
   createTextLabel(rig: THREE.Object3D): THREE.Sprite | null {
     const canvas = document.createElement( 'canvas' );
-    canvas.width = 350;
-    canvas.height = 150;
+    canvas.width = 256;
+    canvas.height = 256;
     const context = canvas.getContext('2d');
     if (!context) return null;
-
-    // Draw text on the (transparent) canvas
-    context.fillStyle = 'black';
     context.font = '32px Helvetica';
+
     const locomotionEnabled = (typeof this.options?.locomotion !== 'boolean' || this.options.locomotion === true);
     const attackEnabled = (typeof this.options?.attack !== 'boolean' || this.options.attack === true);
     const meshSpace = (typeof this.options?.meshSpace === 'boolean' && this.options.meshSpace === true);
@@ -101,16 +99,12 @@ export default class Character {
     context.fillText(`Attack: ${attackEnabled ? '🟢' : '🔴'}`, 0, 96);
     context.fillText(`Mesh Space: ${meshSpace ? '🟢' : '🔴'}`, 0, 128);
 
-    // Use canvas as a sprite texture (always faces the camera)
     const texture = new THREE.CanvasTexture( canvas );
-    const material = new THREE.SpriteMaterial( { map: texture, transparent: true } );
+    const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
     const textLabel = new THREE.Sprite(material);
 
-    textLabel.scale.set(350, 150, 1);
-    textLabel.scale.multiplyScalar(rig.scale.x);
-
-    textLabel.position.set(0, -12, 0);
-    textLabel.position.x += rig.position.x;
+    textLabel.scale.set(10, 10, 1);
+    textLabel.position.set(rig.position.x, -15, 0);
 
     return textLabel;
   }

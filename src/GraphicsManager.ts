@@ -19,7 +19,7 @@ export default class GraphicsManager {
     GraphicsManager.scene = new THREE.Scene();
     GraphicsManager.scene.background = new THREE.Color(0xdddddd); // sky blue; use any color you like
     GraphicsManager.camera = new THREE.PerspectiveCamera(10, window.innerWidth / window.innerHeight, 0.1, 10000);
-    GraphicsManager.camera.position.z = 400;
+    GraphicsManager.camera.position.z = 500;
     GraphicsManager.scene.add(GraphicsManager.camera);
 
     GraphicsManager.controls = new OrbitControls(GraphicsManager.camera, GraphicsManager.renderer.domElement);
