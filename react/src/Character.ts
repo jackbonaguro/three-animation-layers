@@ -6,6 +6,12 @@ import { DampedValue } from './DampedValue';
 
 const ATTACK_CLIP_NAME = 'Swing';
 
+type CharacterOptions = {
+  locomotion?: boolean;
+  attack?: boolean;
+  meshSpace?: boolean;
+} | undefined;
+
 /**
  * Animated character: rig root, {@link AnimationLayerMixer}, and layered clip setup.
  */
@@ -14,7 +20,10 @@ export default class Character {
   static readonly FADE_SECONDS = 0.15;
 
   readonly rig: THREE.Object3D;
+  readonly skeletonHelper: SkeletonHelper;
   readonly mixer: AnimationLayerMixer;
+
+  readonly options: CharacterOptions;
 
   /**
    * Blend parameter smoothing time constant (seconds). ~63% of the gap closes
@@ -51,16 +60,59 @@ export default class Character {
   /** Smoothed strafe component, fed into {@link AnimationBlendTree2D#updateWeights} y. */
   private _locomotionVelocityX = new DampedValue(0, Character.LOCOMOTION_SPEED_SMOOTHING);
 
-  constructor(rig: THREE.Object3D, clips: Record<string, THREE.AnimationClip>) {
+  constructor(rig: THREE.Object3D, clips: Record<string, THREE.AnimationClip>, options?: CharacterOptions) {
     this.rig = rig;
+    this.skeletonHelper = new SkeletonHelper(rig);
     this.mixer = new AnimationLayerMixer(rig);
+    this.options = options ?? {};
     this.setupAnimationLayers(clips);
   }
 
   addToScene(scene: THREE.Scene): void {
-    scene.add(this.rig);
-    const skeletonHelper = new SkeletonHelper(this.rig);
-    scene.add(skeletonHelper);
+    const object3D = new THREE.Object3D();
+
+    object3D.add(this.rig);
+    object3D.add(this.skeletonHelper);
+
+    const textLabel = this.createTextLabel(this.rig);
+    if (textLabel) {
+      object3D.add(textLabel);
+    }
+
+    scene.add(object3D);
+  }
+
+  createTextLabel(rig: THREE.Object3D): THREE.Sprite | null {
+    const canvas = document.createElement( 'canvas' );
+    canvas.width = 350;
+    canvas.height = 150;
+    const context = canvas.getContext('2d');
+    if (!context) return null;
+
+    // Draw text on the (transparent) canvas
+    context.fillStyle = 'black';
+    context.font = '32px Helvetica';
+    const locomotionEnabled = (typeof this.options?.locomotion !== 'boolean' || this.options.locomotion === true);
+    const attackEnabled = (typeof this.options?.attack !== 'boolean' || this.options.attack === true);
+    const meshSpace = (typeof this.options?.meshSpace === 'boolean' && this.options.meshSpace === true);
+
+    context.fillText('Character', 0, 32);
+    context.fillText(`Locomotion: ${locomotionEnabled ? '🟢' : '🔴'}`, 0, 64);
+    context.fillText(`Attack: ${attackEnabled ? '🟢' : '🔴'}`, 0, 96);
+    context.fillText(`Mesh Space: ${meshSpace ? '🟢' : '🔴'}`, 0, 128);
+
+    // Use canvas as a sprite texture (always faces the camera)
+    const texture = new THREE.CanvasTexture( canvas );
+    const material = new THREE.SpriteMaterial( { map: texture, transparent: true } );
+    const textLabel = new THREE.Sprite(material);
+
+    textLabel.scale.set(350, 150, 1);
+    textLabel.scale.multiplyScalar(rig.scale.x);
+
+    textLabel.position.set(0, -12, 0);
+    textLabel.position.x += rig.position.x;
+
+    return textLabel;
   }
 
   update(deltaSeconds: number): void {
@@ -132,12 +184,17 @@ export default class Character {
 
   /** Load an FBX rig (scale, shadows), extract clips, and construct the player. */
   static async loadFromFbx(
+    options?: {
+      locomotion?: boolean;
+      attack?: boolean;
+      meshSpace?: boolean;
+    },
     url = './character.fbx',
     scale = 0.05,
   ): Promise<Character> {
     const rig = await Character.loadFbxRig(url, scale);
     const clips = Character.extractClipsFromRig(rig);
-    return new Character(rig, clips);
+    return new Character(rig, clips, options);
   }
 
   private static async loadFbxRig(url: string, scale: number): Promise<THREE.Group> {
@@ -194,82 +251,94 @@ export default class Character {
   }
 
   private setupAnimationLayers(clips: Record<string, THREE.AnimationClip>): void {
-    // Base layer with foot locomotion
-    const baseLayer = this.mixer.addLayer('base');
+    const locomotionEnabled = (typeof this.options?.locomotion !== 'boolean' || this.options.locomotion === true);
 
+    // Base layer. Idle always plays at full weight so every bone has a real pose
+    // underneath the upper layers (otherwise fades blend to/from the mixer's
+    // rest-pose snapshot, i.e. whatever pose the FBX happened to load in).
+    const baseLayer = this.mixer.addLayer('base');
     if (clips['Idle']) {
       this.idleAction = baseLayer.clipAction(clips['Idle']);
       this.idleAction.play();
     }
-    if (clips['Walking']) {
-      this.walkingAction = baseLayer.clipAction(clips['Walking']);
-    }
-    if (clips['Running']) {
-      this.runningAction = baseLayer.clipAction(clips['Running']);
-    }
-    if (clips['Strafe_Left']) {
-      this.strafeLeftAction = baseLayer.clipAction(clips['Strafe_Left']);
-    }
-    if (clips['Strafe_Right']) {
-      this.strafeRightAction = baseLayer.clipAction(clips['Strafe_Right']);
+
+    if (locomotionEnabled) {
+      // Foot locomotion
+      if (clips['Walking']) {
+        this.walkingAction = baseLayer.clipAction(clips['Walking']);
+      }
+      if (clips['Running']) {
+        this.runningAction = baseLayer.clipAction(clips['Running']);
+      }
+      if (clips['Strafe_Left']) {
+        this.strafeLeftAction = baseLayer.clipAction(clips['Strafe_Left']);
+      }
+      if (clips['Strafe_Right']) {
+        this.strafeRightAction = baseLayer.clipAction(clips['Strafe_Right']);
+      }
+
+      // Blend space is a (forward, strafe) velocity vector. Each threshold sits
+      // at the velocity its clip is authored for:
+      //   idle    (0,    0)    – stationary
+      //   walk    (0.5,  0)    – forward at walk speed
+      //   run    (1,    0)    – forward at run speed
+      //   strafe ±(0, 0.5)    – sideways at walk speed (the clips' authored pace)
+      // Walk and strafe sit at the same magnitude (0.5) so a pure A maps to its
+      // strafe threshold cleanly and W+A produces a real diagonal blend.
+      if (
+        this.idleAction &&
+        this.walkingAction &&
+        this.runningAction &&
+        this.strafeLeftAction &&
+        this.strafeRightAction
+      ) {
+        this.locomotionBlend = new AnimationBlendTree2D(
+          [
+            this.idleAction,
+            this.walkingAction,
+            this.runningAction,
+            this.strafeLeftAction,
+            this.strafeRightAction,
+          ],
+          [
+            new THREE.Vector2(0, 0),
+            new THREE.Vector2(0.5, 0),
+            new THREE.Vector2(1, 0),
+            new THREE.Vector2(0, -0.5),
+            new THREE.Vector2(0, 0.5),
+          ],
+        );
+      }
     }
 
     if (clips[ATTACK_CLIP_NAME]) {
-      const upperBodyMask = new AnimationLayerMask({
-        'mixamorigSpine.quaternion': 1,
-        'mixamorigSpine1.quaternion': 1,
-        'mixamorigSpine2.quaternion': 1,
-        'mixamorigNeck.quaternion': 1,
-        'mixamorigHead.quaternion': 1,
-        'mixamorigLeftShoulder.quaternion': 1,
-        'mixamorigLeftArm.quaternion': 1,
-        'mixamorigLeftForeArm.quaternion': 1,
-        'mixamorigLeftHand.quaternion': 1,
-        'mixamorigRightShoulder.quaternion': 1,
-        'mixamorigRightArm.quaternion': 1,
-        'mixamorigRightForeArm.quaternion': 1,
-        'mixamorigRightHand.quaternion': 1,
-      });
+      if (!this.options || (typeof this.options.attack !== 'boolean' || this.options.attack)) {
+        const upperBodyMask = new AnimationLayerMask({
+          'mixamorigSpine.quaternion': 1,
+          'mixamorigSpine1.quaternion': 1,
+          'mixamorigSpine2.quaternion': 1,
+          'mixamorigNeck.quaternion': 1,
+          'mixamorigHead.quaternion': 1,
+          'mixamorigLeftShoulder.quaternion': 1,
+          'mixamorigLeftArm.quaternion': 1,
+          'mixamorigLeftForeArm.quaternion': 1,
+          'mixamorigLeftHand.quaternion': 1,
+          'mixamorigRightShoulder.quaternion': 1,
+          'mixamorigRightArm.quaternion': 1,
+          'mixamorigRightForeArm.quaternion': 1,
+          'mixamorigRightHand.quaternion': 1,
+        });
 
-      // Mesh-space: the attack keeps the clip's own facing even while the base layer turns the hips.
-      const upperBodyLayer = this.mixer.addLayer('upperBody', { mask: upperBodyMask, blendMode: 'override', blendSpace: 'mesh' });
-      this.attackAction = upperBodyLayer.clipAction(clips[ATTACK_CLIP_NAME]);
-      this.attackAction.loop = THREE.LoopOnce;
-      this.attackAction.clampWhenFinished = true;
-      this.attackAction.setDuration(clips[ATTACK_CLIP_NAME].duration / 2);
-    }
-
-    // Blend space is a (forward, strafe) velocity vector. Each threshold sits
-    // at the velocity its clip is authored for:
-    //   idle    (0,    0)    – stationary
-    //   walk    (0.5,  0)    – forward at walk speed
-    //   run    (1,    0)    – forward at run speed
-    //   strafe ±(0, 0.5)    – sideways at walk speed (the clips' authored pace)
-    // Walk and strafe sit at the same magnitude (0.5) so a pure A maps to its
-    // strafe threshold cleanly and W+A produces a real diagonal blend.
-    if (
-      this.idleAction &&
-      this.walkingAction &&
-      this.runningAction &&
-      this.strafeLeftAction &&
-      this.strafeRightAction
-    ) {
-      this.locomotionBlend = new AnimationBlendTree2D(
-        [
-          this.idleAction,
-          this.walkingAction,
-          this.runningAction,
-          this.strafeLeftAction,
-          this.strafeRightAction,
-        ],
-        [
-          new THREE.Vector2(0, 0),
-          new THREE.Vector2(0.5, 0),
-          new THREE.Vector2(1, 0),
-          new THREE.Vector2(0, -0.5),
-          new THREE.Vector2(0, 0.5),
-        ],
-      );
+        // Mesh-space: the attack keeps the clip's own facing even while the base layer turns the hips.
+        const blendSpace = this.options?.meshSpace ? 'mesh' : 'local';
+        // With locomotion off there is nothing to preserve below the waist, so play the attack full-body.
+        const mask = locomotionEnabled ? upperBodyMask : null;
+        const upperBodyLayer = this.mixer.addLayer('upperBody', { mask, blendMode: 'override', blendSpace });
+        this.attackAction = upperBodyLayer.clipAction(clips[ATTACK_CLIP_NAME]);
+        this.attackAction.loop = THREE.LoopOnce;
+        this.attackAction.clampWhenFinished = true;
+        this.attackAction.setDuration(clips[ATTACK_CLIP_NAME].duration / 2);
+      }
     }
   }
 

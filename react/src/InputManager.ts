@@ -11,7 +11,7 @@ import GraphicsManager from './GraphicsManager';
  */
 export default class InputManager {
   private static wHeld = false;
-  private static shiftHeld = false;
+  static shiftHeld = false;
   private static aHeld = false;
   private static dHeld = false;
 
@@ -42,10 +42,12 @@ export default class InputManager {
   }
 
   private static syncLocomotion(): void {
-    const character = GraphicsManager.character;
-    if (!character) return;
-    character.setMovementDirection(InputManager.directionFromKeys());
-    character.setSprinting(InputManager.shiftHeld);
+    const characters = GraphicsManager.characters;
+    for (const character of characters ?? []) {
+      if (!character) return;
+      character.setMovementDirection(InputManager.directionFromKeys());
+      character.setSprinting(InputManager.shiftHeld);
+    }
   }
 
   private static onKeyDown(ev: KeyboardEvent): void {
@@ -65,7 +67,7 @@ export default class InputManager {
       InputManager.dHeld = true;
       InputManager.syncLocomotion();
     } else if (ev.key === ' ') {
-      GraphicsManager.character?.triggerAttack();
+      GraphicsManager.characters?.forEach(character => character.triggerAttack());
     }
   }
 
