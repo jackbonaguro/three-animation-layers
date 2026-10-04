@@ -22,7 +22,7 @@ export default function Menu({ characters }: { characters: Character[] | null })
 		characters?.forEach(character => character.skeletonHelper.visible = v);
 	});
 
-	folder4.add(settings, 'mixer time scale', 0, 1.5, 0.01).onChange((v: number) => {
+	folder4.add(settings, 'mixer time scale', 0, 2, 0.01).onChange((v: number) => {
 		characters?.forEach(character => character.mixer.timeScale = v);
 	});
 

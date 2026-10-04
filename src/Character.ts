@@ -308,9 +308,9 @@ export default class Character {
     if (clips[ATTACK_CLIP_NAME]) {
       if (!this.options || (typeof this.options.attack !== 'boolean' || this.options.attack)) {
         const upperBodyMask = new AnimationLayerMask({
-          'mixamorigSpine.quaternion': 1,
-          'mixamorigSpine1.quaternion': 1,
-          'mixamorigSpine2.quaternion': 1,
+          'mixamorigSpine.quaternion': 0.25,
+          'mixamorigSpine1.quaternion': 0.5,
+          'mixamorigSpine2.quaternion': 0.75,
           'mixamorigNeck.quaternion': 1,
           'mixamorigHead.quaternion': 1,
           'mixamorigLeftShoulder.quaternion': 1,
