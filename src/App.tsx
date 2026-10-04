@@ -24,10 +24,10 @@ function App() {
       <div ref={canvasRef}></div>
 
       <div id="info">
-        <a href="https://threejs.org" target="_blank" rel="noopener">three.js</a>
+        <a href="https://threejs.org" target="_blank" rel="noreferrer">three.js</a>
         &nbsp;— skeletal animation layers, blend trees, and mesh-space blending.<br/>
         Use W/A/D/Shift to move, Space to attack.<br/>
-        Animations from <a href="https://www.mixamo.com/" target="_blank" rel="noopener">mixamo.com</a>.<br/>
+        Animations from <a href="https://www.mixamo.com/" target="_blank" rel="noreferrer">mixamo.com</a>.<br/>
       </div>
 
       <Menu characters={characters} />
